@@ -831,7 +831,7 @@ void do_sslaccept(int sock,struct http_data* h,int reading) {
       if (buf[0]!=0x16 ||	/* content type: handshake */
 	  buf[1]>3 ||	/* version major */
 	  buf[2]>3 ||	/* version minor */
-	  buf[3]>1) {	/* length > 0x100 */
+	  buf[3]>2) {	/* length > 0x200 */
 	if (buf[0]!=0x80 ||
 	    buf[2]!=1 ||	/* Client Hello */
 	    buf[3]>3 ||	/* version major */
