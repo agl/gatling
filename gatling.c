@@ -2042,6 +2042,7 @@ usage:
   connections=1;
 
 #if !defined(__OPTIMIZE__) && defined(__linux__)
+  /* This happens only if the code was compiled without optimization */
   /* make sure we can dump core even if we switched uid */
   prctl(PR_SET_DUMPABLE,1,0,0);
   /* and make sure we don't have a core dump size limit in place */
