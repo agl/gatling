@@ -38,8 +38,8 @@ const unsigned char ssl_default_dhparams[]="-----BEGIN DH PARAMETERS-----\n"
 "FDQXPlpTK7h3BlR8vDadEpT68OcdLr2+owIBAg==\n"
 "-----END DH PARAMETERS-----\n";
 
-x509_cert srvcert;
-rsa_context rsa;
+x509_crt srvcert;
+pk_context key;
 entropy_context entropy;
 ctr_drbg_context ctr_drbg;
 ssl_cache_context cache;
@@ -92,13 +92,13 @@ int init_serverside_tls(ssl_context* ssl,int sock) {
     entropy_init(&entropy);
     if (ctr_drbg_init(&ctr_drbg, entropy_func, &entropy, (const unsigned char*) "gatling", strlen("gatling")))
       return -1;
-    memset(&rsa,0,sizeof(rsa));
+    memset(&key,0,sizeof(key));
   } else {
-    x509_free(&srvcert);
-    rsa_free(&rsa);
+    x509_crt_free(&srvcert);
+    pk_free(&key);
   }
 
-  memset(&srvcert,0,sizeof(x509_cert));
+  memset(&srvcert,0,sizeof(x509_crt));
   /* for compatibility we expect the same file format as openssl, which
    * looks like this:
 
@@ -122,10 +122,10 @@ fail:
     mmap_unmap(buf,l);
     return -1;
   }
-  rsa_init(&rsa, RSA_PKCS_V15, 0);
+  pk_init(&key);
   /* parse cert and key */
-  if (x509parse_crt(&srvcert,(unsigned char*)buf+i,l-i) ||
-      x509parse_key(&rsa,(unsigned char*)buf,i,NULL,0))
+  if (x509_crt_parse(&srvcert,(unsigned char*)buf+i,l-i) ||
+      pk_parse_key(&key,(unsigned char*)buf,i,NULL,0))
     goto fail;
   mmap_unmap(buf,l);
 
@@ -139,7 +139,7 @@ fail:
   ssl_set_rng( ssl, ctr_drbg_random, &ctr_drbg );
   ssl_set_session_cache( ssl, ssl_cache_get, &cache, ssl_cache_set, &cache);
   ssl_set_ca_chain( ssl, srvcert.next, NULL, NULL);
-  ssl_set_own_cert( ssl, &srvcert, &rsa );
+  ssl_set_own_cert( ssl, &srvcert, &key );
 
   ssl_session_reset( ssl );
   ssl_set_bio( ssl, my_net_recv, (char*)(uintptr_t)sock, my_net_send, (char*)(uintptr_t)sock );
@@ -149,8 +149,8 @@ fail:
   {
     dhm_context dhm;
     memset(&dhm,0,sizeof(dhm));
-    if (x509parse_dhmfile(&dhm, ssl_dhparams) && x509parse_dhmfile(&dhm, ssl_server_cert))
-      x509parse_dhm(&dhm, ssl_default_dhparams, sizeof(ssl_default_dhparams)-1);
+    if (dhm_parse_dhmfile(&dhm, ssl_dhparams) && dhm_parse_dhmfile(&dhm, ssl_server_cert))
+      dhm_parse_dhm(&dhm, ssl_default_dhparams, sizeof(ssl_default_dhparams)-1);
     ssl_set_dh_param_ctx(ssl, &dhm);
   }
 //  ssl_set_dh_param( ssl, "CD95C1B9959B0A135B9D306D53A87518E8ED3EA8CBE6E3A338D9DD3167889FC809FE1AD59B38C98D1A8FCE47E46DF5FB56B8EA3B03B2132C249A99209F62A1AD63511BD08A60655B0463B6F1BB79BEC9D17C71BD269C6B50CF0EDDAAB83290B4C697A7F641FBD21EE0E7B57C698AFEED8DA3AB800525E6887215A61CA62DC437", "04" );
