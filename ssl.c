@@ -76,7 +76,7 @@ int init_serverside_tls(SSL** ssl,int sock) {
     size_t i;
     for (i=0; i<sizeof(dhparam_attempts)/sizeof(dhparam_attempts[0]); ++i) {
       BIO* bio;
-      DH* dh;
+      DH* dh=0;
       if ((bio=dhparam_attempts[i]?BIO_new_file(dhparam_attempts[i],"r"):BIO_new_mem_buf((void*)ssl_default_dhparams,sizeof(ssl_default_dhparams)-1))) {
 	if ((dh=PEM_read_bio_DHparams(bio,NULL,NULL,NULL))) {
 	  SSL_CTX_set_tmp_dh(ctx, dh);
