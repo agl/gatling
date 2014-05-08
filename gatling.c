@@ -825,6 +825,22 @@ void do_sslaccept(int sock,struct http_data* h,int reading) {
      * handshake */
     r=recv(sock,buf,sizeof(buf),MSG_PEEK);
     if (r>5) {
+      if (sshd && buf[0]=='S' && buf[1]=='S' && buf[2]=='H') {
+	if (logging) {
+	  char numbuf[FMT_ULONG];
+	  numbuf[fmt_ulong(numbuf,sock)]=0;
+	  buffer_putmflush(buffer_1,"close/ssh_handshake ",numbuf,"\n");
+	}
+	{
+	  uint32 a=0;
+	  write(forksock[0],&a,4);
+	  io_passfd(forksock[0],sock);
+	}
+	--https_connections;
+	changestate(h,PUNISHMENT);
+	cleanup(sock);
+	return;
+      }
       /* Apparently the packets look radically different depending on
        * whether it's TLS or SSLv2.  GREAT! */
       /* first packet must be handshake */
