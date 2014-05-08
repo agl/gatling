@@ -1006,6 +1006,12 @@ eof:
       buffer_putmflush(buffer_1,"cgiproxy_read0 ",numbuf," ",r," ",s,"\n");
     }
     if (H->buddy) peer->buddy=-1;
+#ifdef SUPPORT_HTTPS
+#ifdef USE_OPENSSL
+    if (peer->t == HTTPSPOST)
+      SSL_shutdown(peer->ssl);
+#endif
+#endif
     cleanup(sockfd);
     return -3;
   } else {
@@ -1124,6 +1130,10 @@ int read_http_post(int sockfd,struct http_data* H) {
       }
       return 0;
     }
+#ifdef USE_OPENSSL
+    if (i==0 && (H->t == HTTPSPOST || H->t == HTTPSREQUEST))
+      SSL_shutdown(H->ssl);
+#endif
   } else
 #endif
   i=read(sockfd,buf,l);
@@ -1184,8 +1194,8 @@ username2:password2
  * response was then already written to the iob). */
 int http_dohtaccess(struct http_data* h,const char* filename,int nobody) {
   size_t filesize;
-  char* map;
-  char* s;
+  const char* map;
+  const char* s;
   char* auth;
   char* realm;
   int r=0;
@@ -1235,7 +1245,7 @@ int http_dohtaccess(struct http_data* h,const char* filename,int nobody) {
 needauth:
   httperror_realm(h,"401 Authorization Required","Authorization required to view this web page",realm,nobody);
 done:
-  munmap(map,filesize);
+  mmap_unmap(map,filesize);
   return r;
 }
 #endif
@@ -2461,6 +2471,11 @@ void handle_write_httppost(int64 i,struct http_data* h) {
 	s[fmt_ulonglong(s,h->sent)]=0;
 	buffer_putmflush(buffer_1,"close/proxydone ",a," ",r," ",s,"\n");
       }
+#ifdef SUPPORT_HTTPS
+#ifdef USE_OPENSSL
+      SSL_shutdown(h->ssl);
+#endif
+#endif
       cleanup(i);
     } else {
       /* The proxy has more data for us */
@@ -2595,7 +2610,7 @@ int cgienvneeded(const char* httpreq,size_t reqlen) {
 
 extern int switch_uid();
 
-void forkslave(int fd,buffer* in,int savedir) {
+void forkslave(int fd,buffer* in,int savedir,const char* chroot_to) {
   /* receive query, create socketpair, fork, set up environment,
    * pass file descriptor of our side of socketpair */
 
@@ -2669,6 +2684,9 @@ void forkslave(int fd,buffer* in,int savedir) {
     return;
   }
 #endif
+
+  if (chroot_to) { chdir(chroot_to); chroot(chroot_to); }
+  if (switch_uid()==-1) return;
 
   if (buffer_get(in,(char*)&dirlen,4)==4 &&
       buffer_get(in,(char*)&ralen,4)==4) {

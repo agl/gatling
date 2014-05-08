@@ -979,6 +979,13 @@ ioerror:
       }
     }
 #endif
+#ifdef SUPPORT_HTTPS
+    if (h->t==HTTPSPOST || h->t==HTTPSRESPONSE || h->t==HTTPSREQUEST) {
+#ifdef USE_OPENSSL
+      SSL_shutdown(h->ssl);
+#endif
+    }
+#endif
     cleanup(i);
   } else if (l>0) {
     /* successfully read some data (l bytes) */
@@ -1393,9 +1400,22 @@ int main(int argc,char* argv[],char* envp[]) {
 	{
 	  int64 savedir;
 	  buffer fsb;
+	  /* we want to drop privileges here unless we are configured to
+	   * support sshd mode, in which case sshd won't work if we
+	   * change our uid before executing it */
+#ifdef SUPPORT_HTTPS
+	  if (!sshd) {
+#endif
 #ifndef __MINGW32__
 	  if (chroot_to) { chdir(chroot_to); chroot(chroot_to); }
 	  if (prepare_switch_uid(new_uid)==-1 || switch_uid()==-1) panic("switch_uid failed");
+#endif
+#ifdef SUPPORT_HTTPS
+#ifndef __MINGW32__
+	  } else {
+	    if (prepare_switch_uid(new_uid)==-1) panic("switch_uid failed");
+#endif
+	  }
 #endif
 	  if (!io_readfile(&savedir,".")) panic("open()");
 	  buffer_init(&fsb,(void*)read,forksock[1],fsbuf,sizeof fsbuf);
@@ -1404,7 +1424,7 @@ int main(int argc,char* argv[],char* envp[]) {
 	    do {
 	      r=waitpid(-1,0,WNOHANG);
 	    } while (r!=0 && r!=-1);
-	    forkslave(forksock[1],&fsb,savedir);
+	    forkslave(forksock[1],&fsb,savedir,chroot_to);
 	    fchdir(savedir);
 	  }
 	}

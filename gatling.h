@@ -321,7 +321,7 @@ extern void httperror(struct http_data* r,const char* title,const char* message,
 extern int buffer_putlogstr(buffer* b,const char* s);
 
 extern char fsbuf[8192];
-extern void forkslave(int fd,buffer* in,int savedir);
+extern void forkslave(int fd,buffer* in,int savedir,const char* chroot_to);
 
 #ifdef USE_ZLIB
 #include <zlib.h>
