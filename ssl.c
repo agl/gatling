@@ -50,7 +50,7 @@ int init_serverside_tls(SSL** ssl,int sock) {
 #endif
     return -1;
   }
-  SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2|SSL_OP_NO_SSLv3|SSL_OP_CIPHER_SERVER_PREFERENCE);
+  SSL_CTX_set_options(ctx, SSL_OP_ALL|SSL_OP_SINGLE_DH_USE|SSL_OP_NO_SSLv2|SSL_OP_NO_SSLv3|SSL_OP_CIPHER_SERVER_PREFERENCE);
   if (!SSL_CTX_use_certificate_chain_file(ctx, ssl_server_cert)) {
     SSL_CTX_free(ctx);
 #if 0
