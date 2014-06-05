@@ -716,7 +716,9 @@ punt2:
 	  return -1;
 	}
 	io_block(fd_to_gateway);
+/* this does not appear to make any sense...?!
 	io_eagain(fd_to_gateway);
+ */
 	if (x->port>0xffff) {
 	  if (connect(fd_to_gateway,(struct sockaddr*)&x->uds,sizeof(x->uds))==-1)
 	    if (errno!=EINPROGRESS)
@@ -1124,7 +1126,15 @@ int read_http_post(int sockfd,struct http_data* H) {
     if (i<0) {
       if (l==POLARSSL_ERR_NET_WANT_READ || l==POLARSSL_ERR_NET_WANT_WRITE) {
 #endif
-	io_eagain(sockfd);
+#ifdef USE_OPENSSL
+	if (i==SSL_ERROR_WANT_READ) io_eagain_read(sockfd);
+	else if (i==SSL_ERROR_WANT_WRITE) io_eagain_write(sockfd);
+#elif defined(USE_POLARSSL)
+	if (i==POLARSSL_ERR_NET_WANT_READ) io_eagain_read(sockfd);
+	else if (i==POLARSSL_ERR_NET_WANT_WRITE) io_eagain_write(sockfd);
+#else
+#error fixme add io_again_* logic for this SSL library
+#endif
 	if (handle_ssl_error_code((int)sockfd,i,1)==-1)
 	  return -1;
       }
@@ -2413,7 +2423,7 @@ nothingmoretocopy:
 
 static void handle_write_error(int64 i,struct http_data* h,int64 r) {
   if (r==-1)
-    io_eagain(i);
+    io_eagain_write(i);
   else if (r<=0) {
     if (r==-3) {
       if (logging) {

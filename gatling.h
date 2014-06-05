@@ -444,4 +444,10 @@ static void new_io_dontwantread(int64 s,const char* file,unsigned int line) {
 #define io_dontwantread(s) new_io_dontwantread(s,__FILE__,__LINE__)
 #endif
 
+#ifndef HAVE_EAGAIN_READWRITE
+#warning you are building gatling against an old version of libowfat
+static inline void io_eagain_read(int64 d) { io_eagain(d); }
+static inline void io_eagain_write(int64 d) { io_eagain(d); }
+#endif
+
 #endif

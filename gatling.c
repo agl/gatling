@@ -761,7 +761,7 @@ static void accept_server_connection(int64 i,struct http_data* H,unsigned long f
 #endif
   }
   if (errno==EAGAIN)
-    io_eagain(i);
+    io_eagain_read(i);
   else
 #ifdef __broken_itojun_v6__
     carp(H->t==HTTPSERVER4||H->t==FTPSERVER4?"socket_accept4":"socket_accept6");
@@ -783,19 +783,23 @@ int handle_ssl_error_code(int sock,int code,int reading) {
   switch (code) {
 #ifdef USE_OPENSSL
   case SSL_ERROR_WANT_READ:
+    io_eagain_read(sock);
     io_wantread(sock);
     io_dontwantwrite(sock);
     return 0;
   case SSL_ERROR_WANT_WRITE:
+    io_eagain_write(sock);
     io_wantwrite(sock);
     io_dontwantread(sock);
     return 0;
 #elif defined(USE_POLARSSL)
   case POLARSSL_ERR_NET_WANT_READ:
+    io_eagain_read(sock);
     io_wantread(sock);
     io_dontwantwrite(sock);
     return 0;
   case POLARSSL_ERR_NET_WANT_WRITE:
+    io_eagain_write(sock);
     io_wantwrite(sock);
     io_dontwantread(sock);
     return 0;
@@ -941,7 +945,15 @@ static void handle_read_misc(int64 i,struct http_data* h,unsigned long ftptimeou
 #error fixme
 #endif
 //      printf("  error %d %s\n",l,ERR_error_string(l,0));
-	io_eagain(i);
+#ifdef USE_OPENSSL
+	if (l==SSL_ERROR_WANT_READ) io_eagain_read(i);
+	else if (l==SSL_ERROR_WANT_WRITE) io_eagain_write(i);
+#elif defined(USE_POLARSSL)
+	if (l==POLARSSL_ERR_NET_WANT_READ) io_eagain_read(i);
+	else if (l==POLARSSL_ERR_NET_WANT_WRITE) io_eagain_write(i);
+#else
+#error fixme 
+#endif
 	if (handle_ssl_error_code(i,l,1)==-1) {
 	  cleanup(i);
 	  return;
@@ -1185,7 +1197,7 @@ static void handle_write_misc(int64 i,struct http_data* h,uint64 prefetchquantum
   printf("MOREDEBUG: iob_send on fd #%d returned %ld (%lu remaining)\n",(int)i,(long)r,(unsigned long)iob_bytesleft(&h->iob));
 #endif
   if (r==-1)
-    io_eagain(i);
+    io_eagain_write(i);
   else if (r<=0) {
     if (r==-3) {
       if (logging) {

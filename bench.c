@@ -18,7 +18,7 @@
 
 void usage() {
   die(0,"usage: bench [-n requests] [-c concurrency] [-t timeout] [-k] [-K count]\n"
-        "       [-C cookie-file] ([http://]host[:port]/uri|@host:port)");
+        "       [-C cookie-file] [-p] ([http://]host[:port]/uri|@host:port)");
 }
 
 unsigned long r[10];
@@ -100,6 +100,7 @@ int main(int argc,char* argv[]) {
   int* fds;
   int* avail;
   int* keepleft;
+  size_t* requests;
   long long* expected;
   unsigned long n=10000;	/* requests */
   unsigned long c=10;		/* concurrency */
@@ -110,6 +111,7 @@ int main(int argc,char* argv[]) {
   unsigned long long errors=0;
   unsigned long long bytes=0;
   int v=0;
+  int p=0;	// print profile
   unsigned long i,done;
   uint16 port=80;
   uint32 scope_id=0;
@@ -129,7 +131,7 @@ int main(int argc,char* argv[]) {
 
   for (;;) {
     int i;
-    int ch=getopt(argc,argv,"n:c:t:kvK:C:r");
+    int ch=getopt(argc,argv,"n:c:t:kvK:C:rp");
     if (ch==-1) break;
     switch (ch) {
     case 'r':
@@ -159,6 +161,8 @@ int main(int argc,char* argv[]) {
     case 'C':
       cookiefile(optarg);
       break;
+    case 'p':
+      p=1;
     case '?':
       break;
     default:
@@ -166,6 +170,10 @@ int main(int argc,char* argv[]) {
     }
   }
   if (n<1 || c<1 || !argv[optind]) usage();
+  if (c>100000) {
+    carp("concurrency limited to 100000 in this build.");
+    c=100000;
+  }
 
   if (argv[optind][0]=='@') {
     mode=REPLAY;
@@ -274,9 +282,10 @@ int main(int argc,char* argv[]) {
   avail=alloca(c*sizeof(*avail));
   expected=alloca(c*sizeof(*expected));
   keepleft=alloca(c*sizeof(*keepleft));
+  requests=alloca(c*sizeof(size_t));
   last.sec.x=23;
   if (!k) K=1;
-  for (i=0; i<c; ++i) { fds[i]=-1; avail[i]=1; keepleft[i]=K; }
+  for (i=0; i<c; ++i) { fds[i]=-1; avail[i]=1; keepleft[i]=K; requests[i]=0; }
 
   taia_now(&first);
 
@@ -446,9 +455,10 @@ int main(int argc,char* argv[]) {
 	   * buffering.  At all.  We expect the Content-Length header to
 	   * come in one piece. */
 	  if (l>10 && !memcmp(buf,"HTTP/1.",7)) {
-	    if (buf[9]>='0' && buf[9]<='9')
+	    if (buf[9]>='0' && buf[9]<='9') {
 	      r[buf[9]-'0']++;
-	    else {
+	      requests[j]++;
+	    } else {
 	      write(1,buf,15); write(1,"\n",1);
 	    }
 	  }
@@ -571,6 +581,17 @@ int main(int argc,char* argv[]) {
 	b[0]=i+'0'; b[1]=0;
 	msg(b,"xx: ",a);
       }
+    }
+  }
+
+  if (p) {
+    char a[FMT_ULONG];
+    char b[FMT_ULONG];
+    msg("successful requests per fd:\n");
+    for (i=0; i<c; ++i) {
+      a[fmt_ulong(a,i)]=0;
+      b[fmt_ulong(b,requests[i])]=0;
+      msg(a," ",b);
     }
   }
 
