@@ -32,7 +32,7 @@ static int make_connection(char* ip,uint16 port,uint32 scope_id,int s) {
       if (s==-1) return -1;
     }
     if (socket_connect6(s,ip,port,scope_id)==-1) {
-      if (errno==EAGAIN || errno==EINPROGRESS || errno==EISCONN)
+      if (errno==EAGAIN || errno==EINPROGRESS || errno==EALREADY || errno==EISCONN)
 	return s;
       ++kaputt;
       if (errno!=ECONNREFUSED && errno!=ECONNRESET)
@@ -46,7 +46,7 @@ static int make_connection(char* ip,uint16 port,uint32 scope_id,int s) {
       if (s==-1) return -1;
     }
     if (socket_connect4(s,ip+12,port)==-1) {
-      if (errno==EAGAIN || errno==EINPROGRESS || errno==EISCONN)
+      if (errno==EAGAIN || errno==EINPROGRESS || errno==EALREADY || errno==EISCONN)
 	return s;
       ++kaputt;
       if (errno!=ECONNREFUSED && errno!=ECONNRESET)
