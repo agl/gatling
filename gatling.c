@@ -744,10 +744,18 @@ static void accept_server_connection(int64 i,struct http_data* H,unsigned long f
 	h->buddy=-1;
 	h->filefd=-1;
 	io_setcookie(n,h);
-      } else
+      } else {
+	buffer_puts(buffer_1,"close/malloc_failed ");
+	buffer_putulong(buffer_1,n);
+	buffer_putnlflush(buffer_1);
 	io_close(n);
-    } else
+      }
+    } else {
+      buffer_puts(buffer_1,"close/io_fd_canwrite_failed ");
+      buffer_putulong(buffer_1,n);
+      buffer_putnlflush(buffer_1);
       io_close(n);
+    }
 #ifdef SUPPORT_MULTIPROC
     if (instances>1) break;
 #endif
