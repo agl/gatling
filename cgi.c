@@ -55,7 +55,6 @@ int main(int argc,char* argv[],char* envp[]) {
   int i;
   char* c;
   long l;
-  unsigned long port;
   (void)argc;
   (void)argv;
   buffer_puts(buffer_1,"Content-Type: text/plain\r\n\r\n");
