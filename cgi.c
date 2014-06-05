@@ -58,6 +58,9 @@ int main(int argc,char* argv[],char* envp[]) {
   (void)argc;
   (void)argv;
   buffer_puts(buffer_1,"Content-Type: text/plain\r\n\r\n");
+  buffer_puts(buffer_1,"running as euid ");
+  buffer_putulong(buffer_1,geteuid());
+  buffer_puts(buffer_1,".\n");
   l=do_cgi(&c);
   if (l>0) {
     buffer_puts(buffer_1,"CGI arguments:\n\n  --==[snip]==--\n");

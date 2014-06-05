@@ -2685,9 +2685,6 @@ void forkslave(int fd,buffer* in,int savedir,const char* chroot_to) {
   }
 #endif
 
-  if (chroot_to) { chdir(chroot_to); chroot(chroot_to); }
-  if (switch_uid()==-1) return;
-
   if (buffer_get(in,(char*)&dirlen,4)==4 &&
       buffer_get(in,(char*)&ralen,4)==4) {
 //    printf("CGI: dirlen %u, ralen %u\n",dirlen,ralen);
@@ -2850,6 +2847,10 @@ void forkslave(int fd,buffer* in,int savedir,const char* chroot_to) {
 		else if (r==0) {
 		  /* child */
 		  pid_t pid;
+
+		  if (chroot_to) { chdir(chroot_to); chroot(chroot_to); }
+		  if (switch_uid()==-1) return;
+
 		  close(savedir);
 		  code=0;
 		  write(fd,&code,4);
@@ -3001,8 +3002,7 @@ void forkslave(int fd,buffer* in,int savedir,const char* chroot_to) {
 			chdir(path);
 			cginame=file;
 		      }
-		      if (switch_uid()==0)
-			execve(cginame,argv,envp);
+		      execve(cginame,argv,envp);
 		    }
 		  }
 		  {
