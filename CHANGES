@@ -4,6 +4,7 @@
   handle invalid urlencoded sequences by passing them through instead of truncating them
   fix FIND_NEXT2 in SMB
   support SMB directory listing in dl
+  fix eagain handling in SSL
 
 0.13:
   add SUPPORT_DIR_REDIRECT in gatling_features.h
