@@ -100,3 +100,8 @@ NOTE: If you use a site like ssllabs.com, it will give you a false
 positive warning that is not actually true.  It says that the server
 does not mitigate the BEAST attack.  If your version of OpenSSL is
 current, this is flat out not true.
+
+UPDATE 2014-07-15: The SSL initialization code will now abort if
+/dev/urandom can't be opened for reading.  It is a common mistake to
+forget to have /dev/urandom in chroot mode (-C option in gatling), and
+in that case randomness could be impaired.

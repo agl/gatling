@@ -39,6 +39,8 @@ int init_serverside_tls(SSL** ssl,int sock) {
 
   if (!library_inited) {
     library_inited=1;
+    if (access("/dev/urandom",R_OK))
+      return -1;
     SSL_load_error_strings();
     SSL_library_init();
     ENGINE_load_builtin_engines();

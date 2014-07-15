@@ -88,6 +88,8 @@ int init_serverside_tls(ssl_context* ssl,int sock) {
   char* buf;
   if (!library_inited) {
     library_inited=1;
+    if (access("/dev/urandom",R_OK))
+      return -1;
     ssl_cache_init(&cache);
     entropy_init(&entropy);
     if (ctr_drbg_init(&ctr_drbg, entropy_func, &entropy, (const unsigned char*) "gatling", strlen("gatling")))

@@ -5,6 +5,7 @@
   fix FIND_NEXT2 in SMB
   support SMB directory listing in dl
   fix eagain handling in SSL
+  abort the SSL initialization if /dev/urandom can't be opened
 
 0.13:
   add SUPPORT_DIR_REDIRECT in gatling_features.h
