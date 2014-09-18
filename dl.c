@@ -914,9 +914,10 @@ again:
       hints.ai_socktype=0;
 
       ips.len=0;
-      if ((gaierr=scan_ip6(tolookup,ip)) && tolookup[gaierr]==0) {
+      if ((gaierr=scan_ip6if(tolookup,ip,&scope_id)) && tolookup[gaierr]==0) {
 	/* ip given, no dns needed */
 	stralloc_catb(&ips,ip,16);
+	stralloc_catb(&ips,(char*)&scope_id,4);
 	goto nodns;
       }
       if (verbose) buffer_putsflush(buffer_1,"DNS lookup... ");
