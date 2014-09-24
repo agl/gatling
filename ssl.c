@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <openssl/ssl.h>
 #include <openssl/engine.h>
+#include <ctype.h>
 
 static int library_inited;
 
@@ -30,37 +31,41 @@ const char ssl_default_dhparams[]="-----BEGIN DH PARAMETERS-----\n"
 "FDQXPlpTK7h3BlR8vDadEpT68OcdLr2+owIBAg==\n"
 "-----END DH PARAMETERS-----\n";
 
-int init_serverside_tls(SSL** ssl,int sock) {
-/* taken from the qmail tls patch */
-  SSL* myssl;
+static char makevaliddns(char c) {
+  if (c>='A' && c<='Z') return c-'A'+'a';
+  if (isalnum(c)) return c;
+  switch (c) {
+  case '.':
+  case '-':
+  case '_':
+    return c;
+  }
+  return -1;
+}
+
+static SSL_CTX* new_context(const char* certname) {
   SSL_CTX* ctx;
   X509_STORE *store;
   X509_LOOKUP *lookup;
 
-  if (!library_inited) {
-    library_inited=1;
-    if (access("/dev/urandom",R_OK))
-      return -1;
-    SSL_load_error_strings();
-    SSL_library_init();
-    ENGINE_load_builtin_engines();
-  }
   /* a new SSL context with the bare minimum of options */
   if (!(ctx=SSL_CTX_new(SSLv23_server_method()))) {
 #if 0
     printf("SSL_CTX_new failed\n");
 #endif
-    return -1;
+    return NULL;
   }
   SSL_CTX_set_options(ctx, SSL_OP_ALL|SSL_OP_SINGLE_DH_USE|SSL_OP_NO_SSLv2|SSL_OP_NO_SSLv3|SSL_OP_CIPHER_SERVER_PREFERENCE);
-  if (!SSL_CTX_use_certificate_chain_file(ctx, ssl_server_cert)) {
+  if (!SSL_CTX_use_certificate_chain_file(ctx, certname)) {
     SSL_CTX_free(ctx);
 #if 0
     printf("SSL_CTX_use_certificate_chain_file failed\n");
 #endif
-    return -1;
+    return NULL;
   }
   SSL_CTX_load_verify_locations(ctx, ssl_client_ca, NULL);
+  while (ERR_get_error());	/* if this failed, we don't care */
+
 #if OPENSSL_VERSION_NUMBER >= 0x00907000L
   /* crl checking */
   store = SSL_CTX_get_cert_store(ctx);
@@ -68,13 +73,14 @@ int init_serverside_tls(SSL** ssl,int sock) {
       (X509_load_crl_file(lookup, ssl_client_crl, X509_FILETYPE_PEM) == 1))
     X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK |
                                 X509_V_FLAG_CRL_CHECK_ALL);
+  while (ERR_get_error());	/* if this failed, we don't care */
 #endif
 
   /* set the callback here; SSL_set_verify didn't work before 0.9.6c */
   SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, verify_cb);
 
   {
-    const char* dhparam_attempts[] = { ssl_dhparams, ssl_server_cert, NULL };
+    const char* dhparam_attempts[] = { ssl_dhparams, certname, NULL };
     size_t i;
     for (i=0; i<sizeof(dhparam_attempts)/sizeof(dhparam_attempts[0]); ++i) {
       BIO* bio;
@@ -91,6 +97,7 @@ int init_serverside_tls(SSL** ssl,int sock) {
       }
     }
   }
+  while (ERR_get_error());	/* if this failed, we don't care */
 
   {
     /* now try to set up ECDH */
@@ -107,6 +114,82 @@ int init_serverside_tls(SSL** ssl,int sock) {
       puts("could not set ECDH curve");
     EC_KEY_free(ecdh);
   }
+
+  return ctx;
+}
+
+static int sni_callback(SSL* ssl,int* ad,void* arg) {
+  char* servername;
+  size_t i;
+
+  (void)ad;
+  (void)arg;
+
+  if (ssl==NULL) return SSL_TLSEXT_ERR_NOACK;	/* can't happen */
+
+  {
+    const char* temp=SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
+    if (!temp || !temp[0] || temp[0]=='.')
+      return SSL_TLSEXT_ERR_NOACK;
+
+    servername=alloca(strlen(temp)+5);
+    strcpy(servername,temp);
+  }
+
+  for (i=0; servername[i]; ++i) {
+    char c;
+    if ((c = makevaliddns(servername[i]))==-1) {
+      return SSL_TLSEXT_ERR_NOACK;
+    }
+    servername[i] = c;
+    if (c=='-' && (servername[i+1]=='.' || !servername[i+1]))
+      return SSL_TLSEXT_ERR_NOACK;
+  }
+  if (servername[i-1]=='-')
+    return SSL_TLSEXT_ERR_NOACK;
+
+  strcat(servername,".pem");
+
+  SSL_CTX* ctx=new_context(servername);
+  if (!ctx)
+    return SSL_TLSEXT_ERR_NOACK;
+
+  /* not sure if this is needed or useful */
+  SSL_CTX_set_tlsext_servername_callback(ctx, sni_callback);
+
+  SSL_set_SSL_CTX(ssl,ctx);
+  SSL_CTX_free(ctx);
+
+  ERR_print_errors_fp(stdout);
+
+  /* this will also check whether public and private keys match */
+  if (!SSL_use_RSAPrivateKey_file(ssl, servername, SSL_FILETYPE_PEM))
+    return SSL_TLSEXT_ERR_NOACK;
+
+  SSL_set_cipher_list(ssl, ssl_ciphers);
+
+  return SSL_TLSEXT_ERR_OK;
+}
+
+int init_serverside_tls(SSL** ssl,int sock) {
+/* taken from the qmail tls patch */
+  SSL* myssl;
+  SSL_CTX* ctx;
+
+  if (!library_inited) {
+    library_inited=1;
+    if (access("/dev/urandom",R_OK))
+      return -1;
+    SSL_load_error_strings();
+    SSL_library_init();
+    ENGINE_load_builtin_engines();
+  }
+
+  ctx = new_context(ssl_server_cert);
+  if (!ctx) return -1;
+
+  /* if this fails, there is nothing we can do about it */
+  SSL_CTX_set_tlsext_servername_callback(ctx, sni_callback);
 
   /* a new SSL object, with the rest added to it directly to avoid copying */
   myssl = SSL_new(ctx);
@@ -148,7 +231,7 @@ int init_serverside_tls(SSL** ssl,int sock) {
 }
 
 
-int init_clientside_tls(SSL** ssl,int sock) {
+int init_clientside_tls(SSL** ssl,int sock,const char* hostname) {
 /* taken from the qmail tls patch */
   SSL* myssl;
   SSL_CTX* ctx;
@@ -171,6 +254,9 @@ int init_clientside_tls(SSL** ssl,int sock) {
 
   SSL_set_cipher_list(myssl, ssl_ciphers);
   SSL_set_fd(myssl, sock);
+
+  if (hostname)
+    SSL_set_tlsext_host_name(myssl, hostname);
 
   *ssl=myssl; /* call SSL_connect(*ssl) next */
   return 0;
