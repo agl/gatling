@@ -3012,6 +3012,15 @@ void forkslave(int fd,buffer* in,int savedir,const char* chroot_to) {
 			chdir(path);
 			cginame=file;
 		      }
+		      /* attempt to defend against CVS-2014-6271 */
+		      {
+			char* c;
+			size_t i;
+			for (i=0; (c=envp[i]); ++i) {
+			  while (*c && *c!='=') ++c;
+			  if (c[0]=='=' && c[1]=='(') c[1]='_';
+			}
+		      }
 		      execve(cginame,argv,envp);
 		    }
 		  }

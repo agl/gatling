@@ -6,6 +6,7 @@
   support SMB directory listing in dl
   fix eagain handling in SSL
   abort the SSL initialization if /dev/urandom can't be opened
+  defang HTTP headers that start with '(' to help with CVE-2014-6271
 
 0.13:
   add SUPPORT_DIR_REDIRECT in gatling_features.h
