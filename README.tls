@@ -105,3 +105,12 @@ UPDATE 2014-07-15: The SSL initialization code will now abort if
 /dev/urandom can't be opened for reading.  It is a common mistake to
 forget to have /dev/urandom in chroot mode (-C option in gatling), and
 in that case randomness could be impaired.
+
+
+UPDATE 2014-10-03: The OpenSSL code now supports SNI. Clients supporting
+SNI send the name of the server they are trying to reach as part of the
+initial handshake.  OpenSSL can than give gatling a callback, which will
+attempt to load the key specified in the handshake.  For example, for
+https://localhost/, gatling would attempt to load server.pem (the
+default key) and then via SNI callback localhost.pem.  All modern
+browsers support it (on Windows you need Vista or newer for IE/Chrome).
