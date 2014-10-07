@@ -7,6 +7,7 @@
   fix eagain handling in SSL
   abort the SSL initialization if /dev/urandom can't be opened
   defang HTTP headers that start with '(' to help with CVE-2014-6271
+  support TCP fast open and turning quick ack mode off
 
 0.13:
   add SUPPORT_DIR_REDIRECT in gatling_features.h

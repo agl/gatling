@@ -1327,6 +1327,36 @@ int handle_torrent_request(int64 sock,struct http_data* h) {
 }
 #endif
 
+/* Attempt to enable TCP fast open (linux only for now).
+ * This means that the client sends the first bytes of the HTTP request
+ * with the third packet of the TCP handshake, instead of sending a
+ * useless ACK there.  I'm not sure why we are expected to switch this
+ * on server-side, but hey, we'll do what we have to.
+ * This is only useful for protocols where the client sends data first,
+ * i.e. not for FTP and not for SSL */
+#ifndef HAVE_SOCKET_FASTOPEN
+static void socket_fastopen(int sock) {
+#ifdef TCP_FASTOPEN
+  setsockopt(sock,SOL_TCP,TCP_FASTOPEN,(int[]){ 5 }, sizeof(int));
+#endif
+}
+#endif
+
+/* Attempt to turn off quick ack mode (linux only for now).
+ * This means that the server won't ACK incoming data immediately
+ * because it knows we will be replying to it soon anyway and can
+ * drive-by ACK their stuff then.
+ * This is useful for all non-interactive protocols. */
+static void quickackoff(int sock) {
+#ifdef HAVE_SOCKET_FASTOPEN
+  socket_quickack(sock,0);
+#else
+#ifdef TCP_QUICKACK
+  setsockopt(sock,SOL_TCP,TCP_QUICKACK,(int[]){ 0 }, sizeof(int));
+#endif
+#endif
+}
+
 int main(int argc,char* argv[],char* envp[]) {
   int s;		/* http socket */
   int f=-1;		/* ftp socket */
@@ -1920,10 +1950,15 @@ usage:
     s=-1;
   } else {
 #ifndef __linux__
+    /* Enabling this on Linux leads to a denial of service attack when
+     * somebody just opens 16 or so connections without sending HTTP
+     * requests, stalling the whole HTTP server in the process */
     socket_deferaccept(s,HTTPIN);
 #endif
     if (socket_bind6_reuse(s,ip,port,0)==-1 || socket_listen(s,16)==-1)
       panic("socket_bind6_reuse");
+    socket_fastopen(s);
+    quickackoff(s);
   }
 #ifdef SUPPORT_FTP
   if (doftp>=0) {
@@ -1934,6 +1969,7 @@ usage:
       buffer_putsflush(buffer_2,"warning: could not bind to FTP port; FTP will be unavailable.\n");
       io_close(f); f=-1;
     }
+    quickackoff(f);
   }
 #endif
 #ifdef SUPPORT_SMB
@@ -1948,6 +1984,8 @@ usage:
       buffer_putsflush(buffer_2,"warning: could not bind to SMB port; SMB will be unavailable.\n");
       io_close(smbs); smbs=-1;
     }
+    socket_fastopen(smbs);
+    quickackoff(smbs);
   }
 #endif
 #ifdef SUPPORT_HTTPS
@@ -1963,6 +2001,7 @@ usage:
       buffer_putsflush(buffer_2,"warning: could not bind to HTTPS port; HTTPS will be unavailable.\n");
       io_close(httpss); httpss=-1;
     }
+    quickackoff(httpss);
   }
 #endif
 #endif
