@@ -44,6 +44,8 @@
 #include <ctype.h>
 #include <string.h>
 
+size_t sent;
+
 #ifndef __linux__
 char *strndup(const char *s,size_t n) {
   char *tmp=!(n+1)?0:(char *)malloc(n+1);
@@ -190,12 +192,16 @@ static void clearstats() {
 }
 
 
-static int make_connection(char* ip,uint16 port,uint32 scope_id) {
+static int make_connection(char* ip,uint16 port,uint32 scope_id,const char* buf,size_t* len) {
   int v6=byte_diff(ip,12,V4mappedprefix);
   int s;
+  ssize_t r;
   if (v6) {
     s=socket_tcp6b();
-    if (socket_connect6(s,ip,port,scope_id)==-1) {
+#ifdef TCP_NODELAY
+    setsockopt(s,IPPROTO_TCP,TCP_NODELAY,(int[]){ 1 },sizeof(int));
+#endif
+    if ((r=socket_fastopen_connect6(s,ip,port,scope_id,buf,*len))==-1) {
 #if 0
       char a[100],b[100],c[100];
       a[fmt_ulong(a,port)]=0;
@@ -203,24 +209,22 @@ static int make_connection(char* ip,uint16 port,uint32 scope_id) {
       c[fmt_ip6c(c,ip)]=0;
       printf("socket_connect6(%s,%s,%s) failed!\n",c,a,b);
 #endif
-      carp("socket_connect6");
+      carp("socket_fastopen_connect6");
       close(s);
       return -1;
     }
   } else {
     s=socket_tcp4b();
-    if (socket_connect4(s,ip+12,port)==-1) {
+#ifdef TCP_NODELAY
+    setsockopt(s,IPPROTO_TCP,TCP_NODELAY,(int[]){ 1 },sizeof(int));
+#endif
+    if ((r=socket_fastopen_connect4(s,ip+12,port,buf,*len))==-1) {
       carp("socket_connect4");
       close(s);
       return -1;
     }
   }
-#ifdef TCP_NODELAY
-  {
-    int one=1;
-    setsockopt(s,IPPROTO_TCP,TCP_NODELAY,&one,sizeof(one));
-  }
-#endif
+  *len=r;
   return s;
 }
 
@@ -587,7 +591,8 @@ static int negotiatesocksconnection(int sock,const char* host,unsigned short por
   if (verbose)
     buffer_putsflush(buffer_1,"SOCKS handshake... ");
   /* version 5, 1 auth method, auth method none */
-  if (write(sock,"\x05\x01\x00",3)!=3 ||
+//  if (write(sock,"\x05\x01\x00",3)!=3 ||
+  if (sent!=3 ||
       read(sock,buf,2)!=2 ||
       buf[0]!=5 || buf[1]!=0) {
     buffer_putsflush(buffer_2,"dl: SOCKS handshake failed\n");
@@ -1029,7 +1034,11 @@ nodns:
 	buffer_putnlflush(buffer_1);
       }
       byte_copy((char*)&scopeid,4,ips.s+i+16);
-      s=make_connection(ips.s+i,socksproxyhost?socksport:connport,scopeid);
+      /* To support TCP fast open, we send the request at connect time */
+      if (socksproxyhost)
+	sent=3, s=make_connection(ips.s+i,socksport,scopeid,"\x05\x01\x00",&sent);
+      else
+	sent=rlen, s=make_connection(ips.s+i,connport,scopeid,request,&sent);
       if (s!=-1) {
 	byte_copy(ip,16,ips.s+i);
 	break;
@@ -1044,7 +1053,11 @@ nodns:
       return 1;
 
   if (mode==HTTP) {
-    if (write(s,request,rlen)!=rlen) panic("write");
+    if (socksproxyhost) {
+      if (write(s,request,rlen)!=rlen) panic("write");
+    } else {
+      if (sent!=rlen) panic("write");
+    }
     switch (readanswer(s,filename,host,onlyprintlocation,port)) {
     case -1: exit(1);
     case -2: free(referer);
