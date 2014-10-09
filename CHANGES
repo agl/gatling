@@ -10,6 +10,7 @@
   support TCP fast open and turning quick ack mode off
   add a HTTP parser for the response from CGIs so that we can support
     keep-alive over a CGI request
+  save one fcntl syscall (needs current libowfat)
 
 0.13:
   add SUPPORT_DIR_REDIRECT in gatling_features.h
