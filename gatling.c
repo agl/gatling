@@ -53,6 +53,8 @@
 #include "havealloca.h"
 #include "havesetresuid.h"
 
+#include <stdio.h>
+
 #if !defined(__OPTIMIZE__) && defined(__linux__)
 #include <sys/prctl.h>
 #endif
@@ -654,12 +656,16 @@ static void accept_server_connection(int64 i,struct http_data* H,unsigned long f
 #warning TCP_NODELAY not defined
 #endif
 
-    if (io_fd_canwrite(n)) {
+#ifdef HAVE_IO_FD_FLAGS
+    if (io_fd_flags(n,IO_FD_CANWRITE|IO_FD_NONBLOCK))
+#else
+    if (io_fd_canwrite(n))
+#endif
+    {
       struct http_data* h;
       h=(struct http_data*)malloc(sizeof(struct http_data));
       if (h) {
 	io_nonblock(n);
-	H->sent=H->received=0;
 	if (!punk) {
 	  if (H->t==HTTPSERVER6 || H->t==HTTPSERVER4
 #ifdef SUPPORT_SMB
@@ -888,7 +894,9 @@ void do_sslaccept(int sock,struct http_data* h,int reading) {
   }
 
 #ifdef USE_OPENSSL
+//  printf("got SSL traffic on fd %d, calling SSL_accept\n",sock); fflush(stdout);
   r=SSL_get_error(h->ssl,SSL_accept(h->ssl));
+//  printf("SSL_accept returned %d\n",r); fflush(stdout);
 //  printf("do_sslaccept -> %d\n",r);
   if (r==SSL_ERROR_NONE)
 #elif defined(USE_POLARSSL)
@@ -912,6 +920,92 @@ void do_sslaccept(int sock,struct http_data* h,int reading) {
 }
 #endif
 
+static void handle_incoming_data(int64 i,struct http_data* h) {
+  int l;
+  if ((l=header_complete(h,i))) {
+    /* at this point we saw a \r\n\r\n */
+    long alen;
+pipeline:
+    /* The h->mimetype reference is here so that we don't count both the HTTP
+      * connection and the first request on it as a dos attack. */
+    if (h->mimetype && new_request_from_ip(h->peerip,now.sec.x-4611686018427387914ULL)==1) {
+      changestate(h,PUNISHMENT);
+      if (logging) {
+	char buf[IP6_FMT];
+	char n[FMT_LONG];
+	n[fmt_ulong(n,i)]=0;
+	buf[fmt_ip6c(buf,h->peerip)]=0;
+
+	buffer_putmflush(buffer_1,"dos_tarpit2 ",n," ",buf,"\n");
+      }
+      if (timeout_secs) {
+	io_dontwantread(i);
+	io_dontwantwrite(i);
+      } else
+	/* if we don't have timeouts enabled, just drop the connection */
+	cleanup(i);
+      return;
+    }
+#ifdef SUPPORT_HTTPS
+    if (h->t==HTTPREQUEST || h->t==HTTPSREQUEST) {
+      httpresponse(h,i,l);
+      if (h->t == HTTPSREQUEST) changestate(h,HTTPSRESPONSE);
+    }
+#else
+    if (h->t==HTTPREQUEST)
+      httpresponse(h,i,l);
+#endif
+#ifdef SUPPORT_SMB
+    else if (h->t==SMBREQUEST) {
+      if (smbresponse(h,i)==-1) {
+	cleanup(i);
+	return;
+      }
+    }
+#endif
+#ifdef SUPPORT_FTP
+    else
+      ftpresponse(h,i);
+#endif
+#ifdef SUPPORT_PROXY
+    if (h->t != HTTPPOST
+#ifdef SUPPORT_HTTPS
+      && h->t != HTTPSPOST
+#endif
+			  ) {
+#endif
+      if (l < (alen=array_bytes(&h->r))) {
+	char* c=array_start(&h->r);
+
+#if 0
+	printf("continuation: consumed %lu bytes from buffer (%lu still there)\n",
+		(unsigned long)l,
+		(unsigned long)(alen-l));
+#endif
+	byte_copy(c,alen-l,c+l);
+	array_truncate(&h->r,1,alen-l);
+	l=header_complete(h,i);
+
+#if 0
+	write(1,"\n\n",2);
+	write(1,array_start(&h->r),array_bytes(&h->r));
+	write(1,"\n\n",2);
+#endif
+
+	if (l) {
+	  /* this breaks SMB: */
+//	      if (h->r.initialized) --h->r.initialized;
+	  goto pipeline;
+	}
+      } else
+	array_reset(&h->r);
+#ifdef SUPPORT_PROXY
+    }
+#endif
+  } else
+    io_wantread(i);
+}
+
 static void handle_read_misc(int64 i,struct http_data* h,unsigned long ftptimeout_secs,tai6464 nextftp) {
   /* This is a TCP client connection waiting for input, i.e.
     *   - an HTTP connection waiting for a HTTP request, or
@@ -920,12 +1014,10 @@ static void handle_read_misc(int64 i,struct http_data* h,unsigned long ftptimeou
     *   - an SMB connection waiting for the next command */
   char buf[8192];
   int l;
-#ifdef MOREDEBUG
-  printf("MOREDEBUG: entering handle_read_misc for fd #%d\n",(int)i);
-#endif
 #ifdef SUPPORT_HTTPS
   assert(h->t != HTTPSRESPONSE);
   if (h->t == HTTPSREQUEST) {
+//    printf("calling SSL_read on fd %d\n",(int)i); fflush(stdout);
 #ifdef USE_OPENSSL
     l=SSL_read(h->ssl,buf,sizeof(buf));
 #elif defined(USE_POLARSSL)
@@ -933,10 +1025,11 @@ static void handle_read_misc(int64 i,struct http_data* h,unsigned long ftptimeou
 #else
 #error fixme
 #endif
-//    printf("SSL_read(sock %d,buf %p,n %d) -> %d\n",i,buf,sizeof(buf),l);
+//    printf("SSL_read(sock %d,buf %p,n %d) -> %d\n",(int)i,buf,(int)sizeof(buf),(int)l); fflush(stdout);
 #ifdef USE_OPENSSL
     if (l==-1) {
       l=SSL_get_error(h->ssl,l);
+//      printf("SSL_get_error -> %d (SSL_ERROR_WANT_READ=%d, SSL_ERROR_WANT_WRITE=%d)\n",l,SSL_ERROR_WANT_READ,SSL_ERROR_WANT_WRITE); fflush(stdout);
       if (l==SSL_ERROR_WANT_READ || l==SSL_ERROR_WANT_WRITE) {
 #elif defined(USE_POLARSSL)
     if (l<0) {
@@ -972,9 +1065,6 @@ static void handle_read_misc(int64 i,struct http_data* h,unsigned long ftptimeou
   } else
 #endif
   l=io_tryread(i,buf,sizeof buf);
-#ifdef MOREDEBUG
-  printf("MOREDEBUG: io_tryread on fd #%d returned %ld\n",(int)i,(long)l);
-#endif
   if (l==-3) {
 #ifdef SUPPORT_FTP
 ioerror:
@@ -1057,92 +1147,10 @@ emerge:
 	httperror(h,"500 request too long","You sent too much header data",0);
 	array_reset(&h->r);
 	goto emerge;
-      } else if ((l=header_complete(h,i))) {
-	/* at this point we saw a \r\n\r\n */
-	long alen;
-pipeline:
-	/* The h->mimetype reference is here so that we don't count both the HTTP
-	 * connection and the first request on it as a dos attack. */
-	if (h->mimetype && new_request_from_ip(h->peerip,now.sec.x-4611686018427387914ULL)==1) {
-	  changestate(h,PUNISHMENT);
-	  if (logging) {
-	    char buf[IP6_FMT];
-	    char n[FMT_LONG];
-	    n[fmt_ulong(n,i)]=0;
-	    buf[fmt_ip6c(buf,h->peerip)]=0;
-
-	    buffer_putmflush(buffer_1,"dos_tarpit2 ",n," ",buf,"\n");
-	  }
-	  if (timeout_secs) {
-	    io_dontwantread(i);
-	    io_dontwantwrite(i);
-	  } else
-	    /* if we don't have timeouts enabled, just drop the connection */
-	    cleanup(i);
-	  return;
-	}
-#ifdef SUPPORT_HTTPS
-	if (h->t==HTTPREQUEST || h->t==HTTPSREQUEST) {
-	  httpresponse(h,i,l);
-	  if (h->t == HTTPSREQUEST) changestate(h,HTTPSRESPONSE);
-	}
-#else
-	if (h->t==HTTPREQUEST)
-	  httpresponse(h,i,l);
-#endif
-#ifdef SUPPORT_SMB
-	else if (h->t==SMBREQUEST) {
-	  if (smbresponse(h,i)==-1) {
-	    cleanup(i);
-	    return;
-	  }
-	}
-#endif
-#ifdef SUPPORT_FTP
-	else
-	  ftpresponse(h,i);
-#endif
-#ifdef SUPPORT_PROXY
-	if (h->t != HTTPPOST
-#ifdef SUPPORT_HTTPS
-	 && h->t != HTTPSPOST
-#endif
-	                     ) {
-#endif
-	  if (l < (alen=array_bytes(&h->r))) {
-	    char* c=array_start(&h->r);
-
-#if 0
-	    printf("continuation: consumed %lu bytes from buffer (%lu still there)\n",
-		   (unsigned long)l,
-		   (unsigned long)(alen-l));
-#endif
-	    byte_copy(c,alen-l,c+l);
-	    array_truncate(&h->r,1,alen-l);
-	    l=header_complete(h,i);
-
-#if 0
-	    write(1,"\n\n",2);
-	    write(1,array_start(&h->r),array_bytes(&h->r));
-	    write(1,"\n\n",2);
-#endif
-
-	    if (l) {
-	      /* this breaks SMB: */
-//	      if (h->r.initialized) --h->r.initialized;
-	      goto pipeline;
-	    }
-	  } else
-	    array_reset(&h->r);
-#ifdef SUPPORT_PROXY
-	}
-#endif
-      }
+      } else
+	handle_incoming_data(i,h);
     }
   }
-#ifdef MOREDEBUG
-  printf("MOREDEBUG: entering handle_read_misc for fd #%d\n",(int)i);
-#endif
 }
 
 #ifdef SUPPORT_HTTPS
@@ -1181,11 +1189,11 @@ int64 https_write_callback(int64 sock,const void* buf,uint64 n) {
 }
 #endif
 
-static void handle_write_misc(int64 i,struct http_data* h,uint64 prefetchquantum) {
+/* call iob_send and handle errors;
+ * if keep-alive is on, detect HTTP pipelining and return 1 if there is
+ * more data left in h->r, otherwise return 0 */
+static int handle_write_misc(int64 i,struct http_data* h,uint64 prefetchquantum) {
   int64 r;
-#ifdef MOREDEBUG
-  puts("MOREDEBUG: entering handle_write_misc");
-#endif
 #ifdef SUPPORT_HTTPS
   assert(h->t != HTTPSREQUEST);
   if (h->t == HTTPSRESPONSE)
@@ -1193,9 +1201,6 @@ static void handle_write_misc(int64 i,struct http_data* h,uint64 prefetchquantum
   else
 #endif
   r=iob_send(i,&h->iob);
-#ifdef MOREDEBUG
-  printf("MOREDEBUG: iob_send on fd #%d returned %ld (%lu remaining)\n",(int)i,(long)r,(unsigned long)iob_bytesleft(&h->iob));
-#endif
   if (r==-1)
     io_eagain_write(i);
   else if (r<=0) {
@@ -1238,7 +1243,7 @@ wroteitall:
       {
 	io_dontwantwrite(i);
 	io_wantread(h->buddy);
-	return;
+	return 0;
       }
 #endif
       if (logging && (h->t == HTTPREQUEST
@@ -1255,10 +1260,12 @@ wroteitall:
 	buffer_putnlflush(buffer_1);
 	h->received=h->sent=0;
       }
-      if (array_bytes(&h->r)>0) --h->r.initialized;
+//      if (array_bytes(&h->r)>0 && h->r.p[h->r.initialized-1]==0) --h->r.initialized;
       iob_reset(&h->iob);
       h->hdrbuf=0;
       if (h->keepalive) {
+	if (array_bytes(&h->r)>0)
+	  return 1;
 //	iob_reset(&h->iob);
 	io_dontwantwrite(i);
 	io_wantread(i);
@@ -1298,14 +1305,16 @@ wroteitall:
     if (iob_bytesleft(&h->iob)==0)	/* optimization, not strictly necessary */
       goto wroteitall;
   }
-#ifdef MOREDEBUG
-  puts("MOREDEBUG: leaving handle_write_misc");
-#endif
+  return 0;
 }
 
 static void prepare_listen(int s,void* whatever) {
   if (s!=-1) {
+#ifdef HAVE_IO_FD_FLAGS
+    if (!io_fd_flags(s,IO_FD_NONBLOCK))
+#else
     if (!io_fd(s))
+#endif
       panic("io_fd");
     io_setcookie(s,whatever);
     io_wantread(s);
@@ -1402,7 +1411,7 @@ int main(int argc,char* argv[],char* envp[]) {
   pid_t* Instances;
 #endif
 
-#if defined(DEBUG_EVENTS) || defined(MOREDEBUG) || defined(SMDEBUG) || defined(STATE_DEBUG)
+#if defined(DEBUG_EVENTS) || defined(SMDEBUG) || defined(STATE_DEBUG)
 #ifdef __dietlibc__
   fflush(stdout);
 #endif
@@ -1900,13 +1909,14 @@ usage:
       }
 #ifdef SUPPORT_FTP
       f=socket_tcp6();
-      if (doftp>=0)
+      if (doftp>=0) {
 	if (socket_bind6_reuse(f,ip,fport,scope_id)==-1 || socket_listen(f,16)==-1) {
 	  if (doftp==1)
 	    panic("socket_bind6_reuse for ftp");
 	  buffer_putsflush(buffer_2,"warning: could not bind to FTP port; FTP will be unavailable.\n");
 	  io_close(f); f=-1;
 	}
+      }
 #endif
     } else {
       io_close(s); s=-1;
@@ -2312,9 +2322,19 @@ usage:
 
 #ifdef SUPPORT_PROXY
 	/* read on PROXYPOST means the CGI sent some data */
-      if (H->t==PROXYPOST)
-	handle_read_proxypost(i,H);
-      else if (H->t==HTTPPOST
+      if (H->t==PROXYPOST) {
+	int64 mainsock=H->buddy;
+	if (handle_read_proxypost(i,H)==-4) {
+	  /* the CGI was done, we closed the CGI socket, now check if
+	   * there is keep-alive / pipelining to take care of */
+	  struct http_data* h=io_getcookie(mainsock);
+#ifdef SUPPORT_HTTPS
+	  if (h->t==HTTPSPOST) h->t=HTTPSREQUEST;
+#endif
+	  if (h->t==HTTPPOST) h->t=HTTPREQUEST;
+	  handle_incoming_data(mainsock,h);
+	}
+      } else if (H->t==HTTPPOST
 #ifdef SUPPORT_HTTPS
 	    || H->t==HTTPSPOST
 #endif
@@ -2447,7 +2467,11 @@ usage:
 	handle_write_ftpactive(i,h);
       else
 #endif
-	handle_write_misc(i,h,prefetchquantum);
+      {
+	if (handle_write_misc(i,h,prefetchquantum)==1)
+	  /* keep-alive && pipelining, generate read event on i */
+	  handle_incoming_data(i,h);
+      }
     }
   }
 #ifdef SUPPORT_MULTIPROC

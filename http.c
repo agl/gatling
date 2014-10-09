@@ -45,6 +45,8 @@
 
 #include "havealloca.h"
 
+struct http_data* kludge;
+
 char* defaultindex;
 
 MD5_CTX md5_ctx;
@@ -707,7 +709,12 @@ freeandfail:
 #endif
 	if (fd_to_gateway==-1) goto punt2;
 	changestate(ctx_for_gatewayfd,PROXYSLAVE);
-	if (!io_fd(fd_to_gateway)) {
+#ifdef HAVE_IO_FD_FLAGS
+	if (!io_fd_flags(fd_to_gateway,IO_FD_NONBLOCK))
+#else
+	if (!io_fd(fd_to_gateway))
+#endif
+	{
 punt:
 	  io_close(fd_to_gateway);
 punt2:
@@ -728,7 +735,6 @@ punt2:
 	    if (errno!=EINPROGRESS)
 	      goto punt;
 	}
-	io_fd_canwrite(fd_to_gateway);
 	if (logging) {
 	  char tmp[100];
 	  char bufsockfd[FMT_ULONG];
@@ -774,7 +780,8 @@ punt2:
 	  }
 	}
 
-	ctx_for_sockfd->keepalive=0;
+//	ctx_for_sockfd->keepalive=0;
+
 	ra[fmt_ip6c(ra,ctx_for_sockfd->peerip)]=0;
 	a=reqlen; write(forksock[0],&a,4);
 	a=strlen(dir); write(forksock[0],&a,4);
@@ -812,7 +819,12 @@ punt2:
 	    free(ctx_for_gatewayfd);
 	    return -1;
 	  }
-	  if (!io_fd_canwrite(fd_to_gateway)) {
+#ifdef HAVE_IO_FD_FLAGS
+	  if (!io_fd_flags(fd_to_gateway,IO_FD_CANWRITE|IO_FD_NONBLOCK))
+#else
+	  if (!io_fd_canwrite(fd_to_gateway))
+#endif
+	  {
 	    httperror(ctx_for_sockfd,"502 Gateway Broken",c,*ctx_for_sockfd->r.p=='H'?1:0);
 	    io_close(fd_to_gateway);
 	    free(ctx_for_gatewayfd);
@@ -888,8 +900,7 @@ punt2:
 	/* figure out how much data we have */
 	{
 	  size_t size_of_header=header_complete(ctx_for_sockfd,sockfd);
-	  size_t size_of_data_in_packet=array_bytes(&ctx_for_sockfd->r) - size_of_header - 1;
-	    /* the -1 is for the \0 we appended */
+	  size_t size_of_data_in_packet=array_bytes(&ctx_for_sockfd->r) - size_of_header;
 
 //	  printf("proxy_connection: size_of_header=%lu, size_of_data_in_packet=%lu, content_length=%lu\n",size_of_header,size_of_data_in_packet,content_length);
 
@@ -904,14 +915,19 @@ punt2:
 	   * we need for this request, if the content length is small
 	   * and the client uses pipelining and added the next request
 	   * already. */
+#if 0
 	  if (size_of_data_in_packet > content_length)
-	    size_of_data_in_packet = content_length;
+	    size_of_data_in_packet -= content_length;
+#endif
 
 	  if (size_of_data_in_packet) {
 	    byte_copy(array_start(&ctx_for_sockfd->r),
 		      size_of_data_in_packet,
 		      array_start(&ctx_for_sockfd->r)+size_of_header);
+	    byte_zero(array_start(&ctx_for_sockfd->r)+size_of_data_in_packet,
+		      size_of_header);
 	    array_truncate(&ctx_for_sockfd->r,1,size_of_data_in_packet);
+	    kludge=ctx_for_sockfd;
 	  } else
 	    array_trunc(&ctx_for_sockfd->r);
 	  ctx_for_sockfd->still_to_copy=content_length;
@@ -955,7 +971,7 @@ int proxy_write_header(int sockfd,struct http_data* h) {
     for (i=j=0; i<hlen; ) {
       int k=str_chr(hdr+i,'\n');
       if (k==0) break;
-      if (case_starts(hdr+i,"Connection: ") || case_starts(hdr+i,"X-Forwarded-For: "))
+      if ( /* case_starts(hdr+i,"Connection: ") || */ case_starts(hdr+i,"X-Forwarded-For: "))
 	i+=k+1;
       else {
 	byte_copy(newheader+j,k+1,hdr+i);
@@ -964,8 +980,9 @@ int proxy_write_header(int sockfd,struct http_data* h) {
       }
     }
     if (j) j-=2;
-    H->keepalive=0;
-    j+=fmt_str(newheader+j,"Connection: close\r\nX-Forwarded-For: ");
+//    H->keepalive=0;
+//    j+=fmt_str(newheader+j,"Connection: close\r\nX-Forwarded-For: ");
+    j+=fmt_str(newheader+j,"X-Forwarded-For: ");
     j+=fmt_ip6c(newheader+j,H->peerip);
     j+=fmt_str(newheader+j,"\r\n\r\n");
   } else if (h->proxyproto==FASTCGI || h->proxyproto==SCGI) {
@@ -991,11 +1008,15 @@ int proxy_is_readable(int sockfd,struct http_data* H) {
   char* x;
   struct http_data* peer=io_getcookie(H->buddy);
   if (!peer) return -1;
+  /* sockfd = the socket to the proxy / CGI
+   * H = the context of the socket to the proxy / CGI
+   * H->buddy = the socket to the client / browser
+   * peer = the context of the socket to the client / browser
+   * peer->buddy = sockfd
+   */
   i=read(sockfd,buf,sizeof(Buf)-2);
   if (i==-1) return -1;
   H->sent+=i;
-  /* TODO: need to parse fastcgi packets from proxy, remove fastcgi
-   * headers */
   if (i==0) {
 eof:
     if (logging) {
@@ -1007,13 +1028,11 @@ eof:
       s[fmt_ulonglong(s,H->sent)]=0;
       buffer_putmflush(buffer_1,"cgiproxy_read0 ",numbuf," ",r," ",s,"\n");
     }
-    if (H->buddy) peer->buddy=-1;
-#ifdef SUPPORT_HTTPS
-#ifdef USE_OPENSSL
-    if (peer->t == HTTPSPOST)
-      SSL_shutdown(peer->ssl);
-#endif
-#endif
+    if (peer->keepalive) {
+      H->buddy=peer->buddy=-1;
+      cleanup(sockfd);
+      return -4;
+    }
     cleanup(sockfd);
     return -3;
   } else {
@@ -1059,6 +1078,7 @@ nextpacket:
 
     if (!H->havefirst) {
       H->havefirst=1;
+      httpstream_initstate(&H->hss);
       if (H->proxyproto==SCGI || H->proxyproto==FASTCGI) {
 	if (case_starts(buf,"Status:")) {
 	  --buf; ++i;
@@ -1081,6 +1101,14 @@ nextpacket:
       if (!x) goto nomem;
       byte_copy(x,i,buf);
     }
+    {
+      size_t y;
+      y=httpstream(&H->hss,x,i);
+      if (y!=i) {
+	buffer_putmflush(buffer_1,"proxy sent more data than http stream parser expected!\n");
+      }
+      i=y;
+    }
     iob_addbuf_free(&peer->iob,x,i);
     gotone=1;
 
@@ -1095,8 +1123,15 @@ nextpacket:
     }
   }
 success:
-  io_dontwantread(sockfd);
+  if (H->hss.state==HSS_DONE) {
+    io_wantwrite(H->buddy);
+    H->buddy=peer->buddy=-1;
+    peer->t = HTTPREQUEST;
+    cleanup(sockfd);
+    return 0;
+  }
   io_wantwrite(H->buddy);
+  io_dontwantread(sockfd);
   return 0;
 nomem:
   if (logging) {
@@ -1117,9 +1152,12 @@ int read_http_post(int sockfd,struct http_data* H) {
 #ifdef SUPPORT_HTTPS
   if (H->t==HTTPSPOST) {
 #ifdef USE_OPENSSL
+//    printf("calling SSL_read in read_http_post on fd %d\n",sockfd); fflush(stdout);
     i=SSL_read(H->ssl,buf,l);
+//    printf("SSL_read(sock %d,buf %p,n %d) -> %d\n",sockfd,buf,(int)l,(int)i); fflush(stdout);
     if (i<0) {
       i=SSL_get_error(H->ssl,i);
+//      printf("SSL_get_error -> %d (SSL_ERROR_WANT_READ=%d, SSL_ERROR_WANT_WRITE=%d)\n",l,SSL_ERROR_WANT_READ,SSL_ERROR_WANT_WRITE); fflush(stdout);
       if (i==SSL_ERROR_WANT_READ || i==SSL_ERROR_WANT_WRITE) {
 #elif defined(USE_POLARSSL)
     i=ssl_read(&H->ssl,(unsigned char*)buf,l);
@@ -1147,22 +1185,10 @@ int read_http_post(int sockfd,struct http_data* H) {
   } else
 #endif
   i=read(sockfd,buf,l);
-#ifdef MOREDEBUG
-  printf("read_http_post: want to read %ld bytes from %d; got %d\n",(long)l,sockfd,i);
-#endif
   if (i<1) return -1;
 
   H->received+=i;
   H->still_to_copy-=i;
-#ifdef MOREDEBUG
-  printf("still_to_copy read_http_post: %p %llu -> %llu\n",H,H->still_to_copy+i,H->still_to_copy);
-#ifdef STATE_DEBUG
-  {
-    struct http_data* mybuddy=io_getcookie(H->buddy);
-    printf("read_http_post: my state is %s, my buddy's state is %s\n",state2string(H->t),state2string(mybuddy->t));
-  }
-#endif
-#endif
   /* we got some data.  Now, for FastCGI we need to add a header before
    * writing it to the proxy */
   if (H->proxyproto==FASTCGI) {
@@ -1783,12 +1809,11 @@ void do_server_status(struct http_data* h,int64 s) {
   buf[i]=0;
   l=i;
 
-  i=fmt_str(nh,"HTTP/1.0 200 OK\r\nServer: " RELEASE "\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: ");
+  i=fmt_str(nh,"HTTP/1.1 200 OK\r\nServer: " RELEASE "\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: ");
   i+=fmt_ulong(nh+i,l);
   i+=fmt_str(nh+i,"\r\n\r\n");
   i+=fmt_str(nh+i,buf);
   iob_addbuf_free(&h->iob,nh,strlen(nh));
-  h->keepalive=0;
   io_wantwrite(s);
 
   if (logging) {
@@ -1910,7 +1935,7 @@ void httpresponse(struct http_data* h,int64 s,long headerlen) {
   h->filefd=-1;
 
   ++rps1;
-  array_cat0(&h->r);
+  array_cat0(&h->r); h->r.initialized--;
   c=array_start(&h->r);
   if (byte_diff(c,5,"GET /") && byte_diff(c,6,"POST /") &&
 #ifdef SUPPORT_PUT
@@ -2295,7 +2320,7 @@ fini:
 
 
 #ifdef SUPPORT_PROXY
-void handle_read_proxypost(int64 i,struct http_data* h) {
+int handle_read_proxypost(int64 i,struct http_data* h) {
   switch (proxy_is_readable(i,h)) {
   case -1:
     {
@@ -2308,19 +2333,16 @@ void handle_read_proxypost(int64 i,struct http_data* h) {
       cleanup(i);
     }
     break;
+  case -4:
+    return -4;
   }
+  return 0;
 }
 
 void handle_read_httppost(int64 i,struct http_data* h) {
   /* read POST data. */
-#ifdef MOREDEBUG
-	printf("read POST data state for %d\n",(int)i);
-#endif
   if (h->still_to_copy) {
     if (array_bytes(&h->r)>0) {
-#ifdef MOREDEBUG
-	    printf("  but there was still data in h->r!\n");
-#endif
       io_dontwantread(i);
       io_wantwrite(h->buddy);
     } else if (read_http_post(i,h)==-1) {
@@ -2331,31 +2353,19 @@ void handle_read_httppost(int64 i,struct http_data* h) {
       }
       cleanup(i);
     } else {
-#ifdef MOREDEBUG
-	    printf("  read something\n");
-#endif
       io_dontwantread(i);
       io_wantwrite(h->buddy);
     }
   } else {
     /* should not happen */
     io_dontwantread(i);
-#ifdef MOREDEBUG
-	  printf("ARGH!!!\n");
-#endif
   }
 }
 
-void handle_write_proxypost(int64 i,struct http_data* h) {
+int handle_write_proxypost(int64 i,struct http_data* h) {
   struct http_data* H=io_getcookie(h->buddy);
   /* do we have some POST data to write? */
-#ifdef MOREDEBUG
-	printf("event: write POST data (%llu) to proxy on %d\n",h->still_to_copy,(int)i);
-#endif
   if (!array_bytes(&H->r)) {
-#ifdef MOREDEBUG
-	  printf("  but nothing here to write!\n");
-#endif
     io_dontwantwrite(i);	/* nope */
     io_wantread(h->buddy);
   } else {
@@ -2364,9 +2374,6 @@ void handle_write_proxypost(int64 i,struct http_data* h) {
       char* c=array_start(&H->r);
       long alen=array_bytes(&H->r);
       long l;
-#ifdef MOREDEBUG
-      printf("%ld bytes still in H->r (%ld in h->r), still to copy: %lld (%lld in h)\n",alen,(long)array_bytes(&h->r),H->still_to_copy,h->still_to_copy);
-#endif
 
       if (h->proxyproto!=FASTCGI) {
 	/* this looks like the right thing to sanity-check but it is not
@@ -2379,9 +2386,6 @@ void handle_write_proxypost(int64 i,struct http_data* h) {
 
       if (alen==0) goto nothingmoretocopy;
       l=write(i,c,alen);
-#ifdef MOREDEBUG
-	    printf("wrote %ld bytes (wanted to write %ld; had %lld still to copy)\n",l,alen,H->still_to_copy);
-#endif
       if (l<1) {
 	/* ARGH!  Proxy crashed! *groan* */
 	if (logging) {
@@ -2395,8 +2399,8 @@ void handle_write_proxypost(int64 i,struct http_data* h) {
 	}
 	cleanup(i);
       } else {
-	byte_copy(c,alen-l,c+l);
-	array_truncate(&H->r,1,alen-l);
+	byte_copy(c,array_bytes(&H->r)-l,c+l);
+	array_truncate(&H->r,1,array_bytes(&H->r)-l);
 //	      printf("still_to_copy PROXYPOST write handler: %p %llu -> %llu\n",H,H->still_to_copy,H->still_to_copy-l);
 	h->still_to_copy-=l;
 //	      printf("still_to_copy PROXYPOST write handler: %p %llu -> %llu\n",h,h->still_to_copy,h->still_to_copy-i);
@@ -2419,6 +2423,7 @@ nothingmoretocopy:
       }
     }
   }
+  return 0;
 }
 
 static void handle_write_error(int64 i,struct http_data* h,int64 r) {
@@ -2453,8 +2458,7 @@ static void handle_write_error(int64 i,struct http_data* h,int64 r) {
       io_dontwantwrite(i);
       io_wantread(h->buddy);
     }
-  } else
-    h->sent+=r;
+  }
 }
 
 void handle_write_httppost(int64 i,struct http_data* h) {
@@ -2465,22 +2469,27 @@ void handle_write_httppost(int64 i,struct http_data* h) {
   else 
 #endif
   r=iob_send(i,&h->iob);
-  if (r > 0 && iob_bytesleft(&h->iob)==0) {
-    /* We wrote something and there is no more data left in the iob. */
-    /* Since we do not buffer the whole data from the proxy, there could
-     * be more data incoming from the proxy.  If this was the last
-     * batch, then the proxy connection has closed itself and set our
-     * buddy to -1. */
-    if (h->buddy==-1) {
+  if (r>0) h->sent+=r;
+  if (iob_bytesleft(&h->iob)==0) {
+#if 0
+    /* this case is now handled in proxy_is_readable() now */
+    struct http_data* peer=io_getcookie(h->buddy);
+    if (peer && peer->hss.state==HSS_DONE) {
+      int64 buddy=h->buddy;
       if (logging) {
-	char a[FMT_ULONG];
+	char numbuf[FMT_ULONG];
 	char r[FMT_ULONG];
 	char s[FMT_ULONG];
-	a[fmt_ulong(a,i)]=0;
+	numbuf[fmt_ulong(numbuf,buddy)]=0;
 	r[fmt_ulonglong(r,h->received)]=0;
 	s[fmt_ulonglong(s,h->sent)]=0;
-	buffer_putmflush(buffer_1,"close/proxydone ",a," ",r," ",s,"\n");
+	buffer_putmflush(buffer_1,"cgiproxy_reqdone ",numbuf," ",r," ",s,"\n");
       }
+      h->buddy=peer->buddy=-1;
+      cleanup(buddy);
+      io_dontwantwrite(i);
+      io_wantread(i);
+      return;
 #ifdef SUPPORT_HTTPS
 #ifdef USE_OPENSSL
       SSL_shutdown(h->ssl);
@@ -2488,11 +2497,13 @@ void handle_write_httppost(int64 i,struct http_data* h) {
 #endif
       cleanup(i);
     } else {
+#endif
       /* The proxy has more data for us */
       io_dontwantwrite(i);
       io_wantread(h->buddy);
+#if 0
     }
-    return;
+#endif
   }
   handle_write_error(i,h,r);
 }
@@ -2520,9 +2531,6 @@ kaputt:
   }
   /* it worked.  We wrote the header.  Now see if there is
     * POST data to write.  h->still_to_copy is Content-Length. */
-#ifdef MOREDEBUG
-	printf("wrote header to %d for %d; Content-Length: %d\n",(int)i,(int)h->buddy,(int)h->still_to_copy);
-#endif
   changestate(h,PROXYPOST);
   array_trunc(&h->r);
   if (h->still_to_copy) {

@@ -77,9 +77,9 @@ forksbench: forkbench.o
 
 gatling.o tlsgatling ptlsgatling: havesetresuid.h
 
-OBJS=mime.o ftp.o http.o smb.o common.o connstat.o
-HTTPS_OBJS=mime.o ftp.c https.o smb.c common.c connstat.o
-PHTTPS_OBJS=mime.o ftp.o phttps.o smb.o common.o connstat.o
+OBJS=mime.o ftp.o http.o smb.o common.o connstat.o httpstream.o
+HTTPS_OBJS=mime.o ftp.c http.c smb.c common.c connstat.o httpstream.o
+PHTTPS_OBJS=mime.o ftp.o http.c smb.c common.c connstat.o httpstream.o
 
 $(OBJS) https.o gatling.o: gatling.h version.h gatling_features.h
 

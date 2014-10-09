@@ -4,6 +4,7 @@
 #define _FILE_OFFSET_BITS 64
 
 #include "gatling_features.h"
+#include "io.h"
 #include "iob.h"
 #include "array.h"
 #include "buffer.h"
@@ -135,6 +136,91 @@ struct handles {
   struct handle* h;
 };
 
+#ifdef SUPPORT_PROXY
+
+static const unsigned long long UNKNOWN=-1;
+static const unsigned long long CHUNKED=-2;
+
+struct httpstreamstate {
+  enum {
+    HSS_HEADER,		// have not seen full header yet
+
+    HSS_HEADER_C,	// inside header, saw \nC
+    HSS_HEADER_CO,	// inside header, saw \nCo
+    HSS_HEADER_CON,	// inside header, saw \nCon
+    HSS_HEADER_CONT,	// inside header, saw \nCont
+    HSS_HEADER_CONTE,	// inside header, saw \nConte
+    HSS_HEADER_CONTEN,	// inside header, saw \nConten
+    HSS_HEADER_CONTENT,	// inside header, saw \nContent
+    HSS_HEADER_CONTENT_,	// inside header, saw \nContent-
+    HSS_HEADER_CONTENT_L,	// inside header, saw \nContent-L
+    HSS_HEADER_CONTENT_LE,	// inside header, saw \nContent-Le
+    HSS_HEADER_CONTENT_LEN,	// inside header, saw \nContent-Len
+    HSS_HEADER_CONTENT_LENG,	// inside header, saw \nContent-Leng
+    HSS_HEADER_CONTENT_LENGT,	// inside header, saw \nContent-Lengt
+    HSS_HEADER_CONTENT_LENGTH,	// inside header, saw \nContent-Length
+    HSS_HEADER_CONTENT_LENGTH_,	// inside header, saw \nContent-Length:
+    HSS_HEADER_CONTENT_LENGTH_NUM,	// inside header, saw \nContent-Length: *[0-9]
+
+    HSS_HEADER_T,	// inside header, saw \nT
+    HSS_HEADER_TR,	// inside header, saw \nTr
+    HSS_HEADER_TRA,	// inside header, saw \nTra
+    HSS_HEADER_TRAN,	// inside header, saw \nTran
+    HSS_HEADER_TRANS,	// inside header, saw \nTrans
+    HSS_HEADER_TRANSF,	// inside header, saw \nTransf
+    HSS_HEADER_TRANSFE,	// inside header, saw \nTransfe
+    HSS_HEADER_TRANSFER,	// inside header, saw \nTransfer
+    HSS_HEADER_TRANSFER_,	// inside header, saw \nTransfer-
+    HSS_HEADER_TRANSFER_E,	// inside header, saw \nTransfer-E
+    HSS_HEADER_TRANSFER_EN,	// inside header, saw \nTransfer-En
+    HSS_HEADER_TRANSFER_ENC,	// inside header, saw \nTransfer-Enc
+    HSS_HEADER_TRANSFER_ENCO,	// inside header, saw \nTransfer-Enco
+    HSS_HEADER_TRANSFER_ENCOD,	// inside header, saw \nTransfer-Encod
+    HSS_HEADER_TRANSFER_ENCODI,	// inside header, saw \nTransfer-Encodi
+    HSS_HEADER_TRANSFER_ENCODIN,	// inside header, saw \nTransfer-Encodin
+    HSS_HEADER_TRANSFER_ENCODING,	// inside header, saw \nTransfer-Encoding
+    HSS_HEADER_TRANSFER_ENCODING_,	// inside header, saw \nTransfer-Encoding:
+    HSS_HEADER_TRANSFER_ENCODING_C,	// inside header, saw \nTransfer-Encoding: *c
+    HSS_HEADER_TRANSFER_ENCODING_CH,	// inside header, saw \nTransfer-Encoding: *ch
+    HSS_HEADER_TRANSFER_ENCODING_CHU,	// inside header, saw \nTransfer-Encoding: *chu
+    HSS_HEADER_TRANSFER_ENCODING_CHUN,	// inside header, saw \nTransfer-Encoding: *chun
+    HSS_HEADER_TRANSFER_ENCODING_CHUNK,	// inside header, saw \nTransfer-Encoding: *chunk
+    HSS_HEADER_TRANSFER_ENCODING_CHUNKE,	// inside header, saw \nTransfer-Encoding: *chunke
+    HSS_HEADER_TRANSFER_ENCODING_CHUNKED,	// inside header, saw \nTransfer-Encoding: *chunked
+
+    HSS_HEADER_OTHER,	// inside some other header line
+
+    HSS_HEADER_CR,	// inside header, saw \r
+    HSS_HEADER_CRLF,	// inside header, saw \r\n
+    HSS_HEADER_CRLFCR,	// inside header, saw \r\n\r
+    HSS_KNOWLENGTH,	// have seen header, know number of bytes left
+    HSS_INFINITE,	// neither content-length nor chunked encoding found
+
+    HSS_HEADER_CHUNKED,	// reading chunked encoding header
+    HSS_HEADER_CHUNKED_CR,	// reading chunked encoding header, saw \r
+    HSS_HEADER_CHUNKED_CRLF,	// reading chunked encoding header, saw \r\n
+    HSS_HEADER_CHUNKED_CRLF_NUM,	// reading chunked encoding header, saw \r\n[0-9]+
+    HSS_HEADER_CHUNKED_CRLF_NUM_CR,	// reading chunked encoding header, saw \r\n[0-9]+\r
+
+    HSS_KNOWLENGTH_CHUNKED,	// read chunk header, know length of it, and it's > 0
+
+    HSS_DONE		// we saw all we need
+  } state;
+  enum {
+    DONTKNOW=0,
+    REQUEST=1,
+    POSTREQUEST=2,
+    RESPONSE=3
+  } type;
+  unsigned long long bytesleft;
+};
+
+void httpstream_initstate(struct httpstreamstate* hss);
+int httpstream_update(struct httpstreamstate* hss,char c);
+size_t httpstream(struct httpstreamstate* hss,
+		  const char* buf, size_t len);
+#endif
+
 struct http_data {
   enum conntype t;
 #ifdef SUPPORT_FTP
@@ -171,6 +257,7 @@ struct http_data {
   unsigned long long still_to_copy;	/* for POST/PUT requests */
   int havefirst;	/* first read contains cgi header */
   char* oldheader;	/* old, unmodified request */
+  struct httpstreamstate hss;
 #endif
 #ifdef SUPPORT_HTTPS
 #ifdef USE_POLARSSL
@@ -306,9 +393,9 @@ extern const char* mimetypesfilename;
 extern const char* mimetype(const char* filename,int fd);
 
 extern int add_proxy(const char* c);
-extern void handle_read_proxypost(int64 i,struct http_data* H);
+extern int handle_read_proxypost(int64 i,struct http_data* H);
 extern void handle_read_httppost(int64 i,struct http_data* H);
-extern void handle_write_proxypost(int64 i,struct http_data* h);
+extern int handle_write_proxypost(int64 i,struct http_data* h);
 extern void handle_write_httppost(int64 i,struct http_data* h);
 extern void handle_write_proxyslave(int64 i,struct http_data* h);
 

@@ -317,7 +317,11 @@ int main(int argc,char* argv[]) {
 	fds[i]=make_connection(ips.s,port,scope_id,-1);
 	if (fds[i]==-1) diesys(1,"socket/connect");
 	avail[i]=2;
+#ifdef HAVE_IO_FD_FLAGS
+	if (io_fd_flags(fds[i],IO_FD_CANWRITE|IO_FD_NONBLOCK)==0) diesys(1,"io_fd");
+#else
 	if (io_fd_canwrite(fds[i])==0) diesys(1,"io_fd");
+#endif
 	io_setcookie(fds[i],(void*)i);
 //	io_wantread(fds[i]);
 	io_wantwrite(fds[i]);

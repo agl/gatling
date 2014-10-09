@@ -627,7 +627,12 @@ closeandgo:
       c+=fmt_str(c,"|)\r\n");
     }
     *c=0;
-    if (io_fd(h->buddy)) {
+#ifdef HAVE_IO_FD_FLAGS
+    if (io_fd_flags(h->buddy,IO_FD_NONBLOCK))
+#else
+    if (io_fd(h->buddy))
+#endif
+    {
       struct http_data* x=malloc(sizeof(struct http_data));
       if (!x) {
 freecloseabort:
@@ -707,18 +712,22 @@ syntaxerror:
       r=scan_ulong(c,&l); if (l>255) goto syntaxerror;
       port+=l;
     }
+    if (byte_diff(h->peerip,16,ip)) {
+      h->hdrbuf="425 Sorry, but I will only connect back to your own IP.\r\n";
+      goto ABEND;
+    }
     h->buddy=socket_tcp6();
     if (h->buddy==-1) {
       h->hdrbuf="425 socket() failed.\r\n";
       goto ABEND;
     }
-    if (byte_diff(h->peerip,16,ip)) {
-      h->hdrbuf="425 Sorry, but I will only connect back to your own IP.\r\n";
-      io_close(h->buddy);
-      goto ABEND;
-    }
     h->hdrbuf="200 Okay, go ahead.\r\n";
-    if (io_fd(h->buddy)) {
+#ifdef HAVE_IO_FD_FLAGS
+    if (io_fd_flags(h->buddy,IO_FD_NONBLOCK))
+#else
+    if (io_fd(h->buddy))
+#endif
+    {
       struct http_data* x=malloc(sizeof(struct http_data));
       if (!x) goto closeandgo;
       byte_zero(x,sizeof(struct http_data));
@@ -872,7 +881,11 @@ pasverror:
     free(H);
     io_close(i);
   } else {
+#ifdef HAVE_IO_FD_FLAGS
+    if (!io_fd_flags(n,IO_FD_NONBLOCK|IO_FD_CANWRITE)) goto pasverror;
+#else
     if (!io_fd_canwrite(n)) goto pasverror;
+#endif
     io_nonblock(n);
     if (logging) {
       buffer_puts(buffer_1,"pasv_accept ");
