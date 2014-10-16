@@ -927,7 +927,6 @@ punt2:
 	    byte_zero(array_start(&ctx_for_sockfd->r)+size_of_data_in_packet,
 		      size_of_header);
 	    array_truncate(&ctx_for_sockfd->r,1,size_of_data_in_packet);
-	    kludge=ctx_for_sockfd;
 	  } else
 	    array_trunc(&ctx_for_sockfd->r);
 	  ctx_for_sockfd->still_to_copy=content_length;
@@ -1127,6 +1126,11 @@ success:
   if (H->hss.state==HSS_DONE) {
     io_wantwrite(H->buddy);
     H->buddy=peer->buddy=-1;
+#ifdef SUPPORT_HTTPS
+    if (peer->t == HTTPSPOST)
+      peer->t=HTTPSRESPONSE;
+    else
+#endif
     peer->t = HTTPREQUEST;
     cleanup(sockfd);
     return 0;

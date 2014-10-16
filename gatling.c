@@ -238,7 +238,12 @@ void cleanup(int64 fd) {
 #endif
 #ifdef SUPPORT_HTTPS
     if (h->t==HTTPSREQUEST || h->t==HTTPSPOST || h->t==HTTPSACCEPT ||
-	h->t==HTTPSACCEPT_CHECK || h->t==HTTPSRESPONSE) --https_connections;
+	h->t==HTTPSACCEPT_CHECK || h->t==HTTPSRESPONSE) {
+      --https_connections;
+#ifdef USE_OPENSSL
+      SSL_shutdown(h->ssl);
+#endif
+    }
 #endif
 
 #if defined(SUPPORT_FTP)
@@ -1166,6 +1171,7 @@ int64 https_write_callback(int64 sock,const void* buf,uint64 n) {
   if (n>65536) n=65536;
 #ifdef USE_OPENSSL
   l=SSL_write(H->ssl,buf,n);
+//  fprintf(stderr,"SSL_write(\"%.*s\",%u) -> %d\n",n>16?16:(int)n,buf,(unsigned int)n,l);
   if (l<0) {
     l=SSL_get_error(H->ssl,l);
 #elif defined(USE_POLARSSL)
@@ -2334,8 +2340,16 @@ usage:
 #endif
 	    if (h->t==HTTPPOST) h->t=HTTPREQUEST;
 	    handle_incoming_data(mainsock,h);
-	  } else
+	  } else {
+#ifdef SUPPORT_HTTPS
+	    if (h->t==HTTPSPOST) {
+#ifdef USE_OPENSSL
+	      SSL_shutdown(h->ssl);
+#endif
+	    }
+#endif
 	    cleanup(i);
+	  }
 	}
       } else if (H->t==HTTPPOST
 #ifdef SUPPORT_HTTPS
