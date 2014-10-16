@@ -1028,6 +1028,7 @@ eof:
       s[fmt_ulonglong(s,H->sent)]=0;
       buffer_putmflush(buffer_1,"cgiproxy_read0 ",numbuf," ",r," ",s,"\n");
     }
+    if (H->hss.state==HSS_INFINITE) peer->keepalive=0;
     if (peer->keepalive) {
       H->buddy=peer->buddy=-1;
       cleanup(sockfd);

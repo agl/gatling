@@ -226,7 +226,7 @@ shared:
       if (hss->bytesleft==CHUNKED) {
 	// chunked encoding; read chunked header next.
 	hss->state=HSS_HEADER_CHUNKED_CRLF;
-      } else if (hss->bytesleft==UNKNOWN) {
+      } else if (hss->bytesleft==UNKNOWN || hss->bytesleft==0) {
 	// neither chunked encoding nor content length
 	// only way to end the stream is to drop the connection
 	hss->state=HSS_INFINITE;

@@ -2328,11 +2328,14 @@ usage:
 	  /* the CGI was done, we closed the CGI socket, now check if
 	   * there is keep-alive / pipelining to take care of */
 	  struct http_data* h=io_getcookie(mainsock);
+	  if (h->keepalive) {
 #ifdef SUPPORT_HTTPS
-	  if (h->t==HTTPSPOST) h->t=HTTPSREQUEST;
+	    if (h->t==HTTPSPOST) h->t=HTTPSREQUEST;
 #endif
-	  if (h->t==HTTPPOST) h->t=HTTPREQUEST;
-	  handle_incoming_data(mainsock,h);
+	    if (h->t==HTTPPOST) h->t=HTTPREQUEST;
+	    handle_incoming_data(mainsock,h);
+	  } else
+	    cleanup(i);
 	}
       } else if (H->t==HTTPPOST
 #ifdef SUPPORT_HTTPS
