@@ -262,3 +262,9 @@ int init_clientside_tls(SSL** ssl,int sock,const char* hostname) {
   return 0;
 }
 
+void free_tls_memory() {
+  ENGINE_cleanup();
+  CRYPTO_cleanup_all_ex_data();
+  ASN1_STRING_TABLE_cleanup();
+  ERR_free_strings();
+}

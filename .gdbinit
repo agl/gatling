@@ -1,1 +1,1 @@
-set args -T0 -i 127.0.0.1 -O 'F/127.0.0.1/8000/\.php$'
+set args -L -C+x -T0

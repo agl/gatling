@@ -16,6 +16,7 @@
 #include <polarssl/dhm.h>
 #include "mmap.h"
 #include <ctype.h>
+#include "pssl.h"
 
 #ifdef POLARSSL_ERR_NET_TRY_AGAIN
 #error polarssl version too old, try the svn trunk
@@ -39,8 +40,6 @@ const unsigned char ssl_default_dhparams[]="-----BEGIN DH PARAMETERS-----\n"
 "FDQXPlpTK7h3BlR8vDadEpT68OcdLr2+owIBAg==\n"
 "-----END DH PARAMETERS-----\n";
 
-x509_crt srvcert;
-pk_context key;
 entropy_context entropy;
 ctr_drbg_context ctr_drbg;
 ssl_cache_context cache;
@@ -144,15 +143,11 @@ static int sni_callback( void* p_info, ssl_context* ssl, const unsigned char* na
   char fn[136];
   unsigned int i;
   int r=-1;
-  x509_crt* _crt=(x509_crt*)malloc(sizeof(*_crt));
-  pk_context* _key=(pk_context*)malloc(sizeof(*_key));
-  (void)p_info;
-  if (!_crt || !_key) {
-    free(_crt);
-    free(_key);
+  struct ssl_data* sd=(struct ssl_data*)p_info;
+  sd->snidata=malloc(sizeof(*sd->snidata));
+  if (!sd->snidata) return -1;
+  if (namelen<1 || namelen>128 || name[0]=='.' || name[0]=='-')
     return -1;
-  }
-  if (namelen<1 || namelen>128 || name[0]=='.' || name[0]=='-') return -1;
   for (i=0; i<namelen; ++i) {
     char c;
     if ((c = makevaliddns(name[i])) == -1)
@@ -164,11 +159,9 @@ static int sni_callback( void* p_info, ssl_context* ssl, const unsigned char* na
   if (fn[i-1]=='-')
     return -1;
   strcpy(fn+i,".pem");
-  if (parse_cert(fn, _crt, _key))
+  if (parse_cert(fn, &sd->snidata->crt, &sd->snidata->key))
     return 0;	/* if we failed to parse the certificate, then we fall back on the build-in one */
-  r=ssl_set_own_cert( ssl, _crt, _key);
-//  x509_crt_free(&_crt);
-//  pk_free(&_key);
+  r=ssl_set_own_cert( ssl, &sd->snidata->crt, &sd->snidata->key);
   return r;
 }
 
@@ -176,7 +169,7 @@ static void my_debug( void* ctx, int level, const char* str) {
   write(1,str,strlen(str));
 }
 
-int init_serverside_tls(ssl_context* ssl,int sock) {
+int init_serverside_tls(struct ssl_data* d,int sock) {
   if (!library_inited) {
     library_inited=1;
     if (access("/dev/urandom",R_OK))
@@ -185,46 +178,56 @@ int init_serverside_tls(ssl_context* ssl,int sock) {
     entropy_init(&entropy);
     if (ctr_drbg_init(&ctr_drbg, entropy_func, &entropy, (const unsigned char*) "gatling", strlen("gatling")))
       return -1;
-    memset(&key,0,sizeof(key));
-  } else {
-    x509_crt_free(&srvcert);
-    pk_free(&key);
   }
 
-  if (parse_cert(ssl_server_cert, &srvcert, &key))
+  memset(d,0,sizeof(*d));
+  if (parse_cert(ssl_server_cert, &d->crt, &d->key))
     return -1;
 
-  memset(ssl,0,sizeof(*ssl));
-
-  if (ssl_init(ssl))
+  if (ssl_init(&d->ssl))
     return -1;
 
-  ssl_set_endpoint( ssl, SSL_IS_SERVER );
-  ssl_set_authmode( ssl, SSL_VERIFY_NONE );
-  ssl_set_rng( ssl, ctr_drbg_random, &ctr_drbg );
-  ssl_set_dbg( ssl, my_debug, NULL);
-  ssl_set_session_cache( ssl, ssl_cache_get, &cache, ssl_cache_set, &cache);
-  ssl_set_ca_chain( ssl, srvcert.next, NULL, NULL);
-  ssl_set_own_cert( ssl, &srvcert, &key );
-  ssl_set_sni( ssl, sni_callback, NULL );
+  ssl_set_endpoint( &d->ssl, SSL_IS_SERVER );
+  ssl_set_authmode( &d->ssl, SSL_VERIFY_NONE );
+  ssl_set_rng( &d->ssl, ctr_drbg_random, &ctr_drbg );
+  ssl_set_dbg( &d->ssl, my_debug, NULL);
+  ssl_set_session_cache( &d->ssl, ssl_cache_get, &cache, ssl_cache_set, &cache);
+  ssl_set_ca_chain( &d->ssl, d->crt.next, NULL, NULL);
+  ssl_set_own_cert( &d->ssl, &d->crt, &d->key );
+  ssl_set_sni( &d->ssl, sni_callback, d );
 
-  ssl_set_bio( ssl, my_net_recv, (char*)(uintptr_t)sock, my_net_send, (char*)(uintptr_t)sock );
+  ssl_set_bio( &d->ssl, my_net_recv, (char*)(uintptr_t)sock, my_net_send, (char*)(uintptr_t)sock );
 
 //  ssl_set_ciphersuites( ssl, ciphersuites );
 
   {
-    dhm_context dhm;
-    memset(&dhm,0,sizeof(dhm));
-    if (dhm_parse_dhmfile(&dhm, ssl_dhparams) && dhm_parse_dhmfile(&dhm, ssl_server_cert))
-      dhm_parse_dhm(&dhm, ssl_default_dhparams, sizeof(ssl_default_dhparams)-1);
-    ssl_set_dh_param_ctx(ssl, &dhm);
+    if (dhm_parse_dhmfile(&d->dhm, ssl_dhparams) && dhm_parse_dhmfile(&d->dhm, ssl_server_cert))
+      dhm_parse_dhm(&d->dhm, ssl_default_dhparams, sizeof(ssl_default_dhparams)-1);
+    ssl_set_dh_param_ctx(&d->ssl, &d->dhm);
   }
 //  debug_set_threshold(65535);
 
-  ssl_set_min_version(ssl, SSL_MAJOR_VERSION_3, SSL_MINOR_VERSION_1);	/* demand at least TLS 1.0 */
+  ssl_set_min_version(&d->ssl, SSL_MAJOR_VERSION_3, SSL_MINOR_VERSION_1);	/* demand at least TLS 1.0 */
 //  ssl_set_dh_param( ssl, "CD95C1B9959B0A135B9D306D53A87518E8ED3EA8CBE6E3A338D9DD3167889FC809FE1AD59B38C98D1A8FCE47E46DF5FB56B8EA3B03B2132C249A99209F62A1AD63511BD08A60655B0463B6F1BB79BEC9D17C71BD269C6B50CF0EDDAAB83290B4C697A7F641FBD21EE0E7B57C698AFEED8DA3AB800525E6887215A61CA62DC437", "04" );
 
-  ssl_session_reset( ssl );
+  ssl_session_reset( &d->ssl );
   return 0;
 }
 
+void free_tls_ctx(struct ssl_data* d) {
+  ssl_free(&d->ssl);
+  dhm_free(&d->dhm);
+  x509_crt_free(&d->crt);
+  pk_free(&d->key);
+  if (d->snidata) {
+    x509_crt_free(&d->snidata->crt);
+    pk_free(&d->snidata->key);
+    free(d->snidata);
+  }
+}
+
+void free_tls_memory(void) {
+  ssl_cache_free( &cache );
+  ctr_drbg_free( &ctr_drbg );
+  entropy_free( &entropy );
+}

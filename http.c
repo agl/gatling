@@ -887,7 +887,7 @@ punt2:
 #if defined(USE_OPENSSL)
 	      SSL_write(ctx_for_sockfd->ssl,contmsg,sizeof(contmsg)-1);
 #elif defined(USE_POLARSSL)
-	      ssl_write(&ctx_for_sockfd->ssl,(const unsigned char*)contmsg,sizeof(contmsg)-1);
+	      ssl_write(&ctx_for_sockfd->ssldata->ssl,(const unsigned char*)contmsg,sizeof(contmsg)-1);
 #else
 #warn fixme update SSL code in http.c
 #endif
@@ -1165,7 +1165,7 @@ int read_http_post(int sockfd,struct http_data* H) {
 //      printf("SSL_get_error -> %d (SSL_ERROR_WANT_READ=%d, SSL_ERROR_WANT_WRITE=%d)\n",l,SSL_ERROR_WANT_READ,SSL_ERROR_WANT_WRITE); fflush(stdout);
       if (i==SSL_ERROR_WANT_READ || i==SSL_ERROR_WANT_WRITE) {
 #elif defined(USE_POLARSSL)
-    i=ssl_read(&H->ssl,(unsigned char*)buf,l);
+    i=ssl_read(&H->ssldata->ssl,(unsigned char*)buf,l);
     if (i<0) {
       if (l==POLARSSL_ERR_NET_WANT_READ || l==POLARSSL_ERR_NET_WANT_WRITE) {
 #endif

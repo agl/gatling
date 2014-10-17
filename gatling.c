@@ -267,7 +267,10 @@ void cleanup(int64 fd) {
     if (h->ssl) SSL_free(h->ssl);
 #endif
 #ifdef USE_POLARSSL
-    ssl_free(&h->ssl);
+    if (h->ssldata) {
+      free_tls_ctx(h->ssldata);
+      free(h->ssldata);
+    }
 #endif
 #endif
 #ifdef SUPPORT_SMB
@@ -718,7 +721,8 @@ static void accept_server_connection(int64 i,struct http_data* H,unsigned long f
 #ifdef USE_OPENSSL
 	  if (init_serverside_tls(&h->ssl,n))
 #elif defined(USE_POLARSSL)
-	  if (init_serverside_tls(&h->ssl,n))
+	  h->ssldata=malloc(sizeof(*h->ssldata));
+	  if (!h->ssldata || init_serverside_tls(h->ssldata,n))
 #endif
 	  {
 	    if (logging) {
@@ -905,7 +909,7 @@ void do_sslaccept(int sock,struct http_data* h,int reading) {
 //  printf("do_sslaccept -> %d\n",r);
   if (r==SSL_ERROR_NONE)
 #elif defined(USE_POLARSSL)
-  r=ssl_handshake(&h->ssl);
+  r=ssl_handshake(&h->ssldata->ssl);
   if (r==0)
 #endif
   {
@@ -1026,7 +1030,7 @@ static void handle_read_misc(int64 i,struct http_data* h,unsigned long ftptimeou
 #ifdef USE_OPENSSL
     l=SSL_read(h->ssl,buf,sizeof(buf));
 #elif defined(USE_POLARSSL)
-    l=ssl_read(&h->ssl,(unsigned char*)buf,sizeof(buf));
+    l=ssl_read(&h->ssldata->ssl,(unsigned char*)buf,sizeof(buf));
 #else
 #error fixme
 #endif
@@ -1175,7 +1179,7 @@ int64 https_write_callback(int64 sock,const void* buf,uint64 n) {
   if (l<0) {
     l=SSL_get_error(H->ssl,l);
 #elif defined(USE_POLARSSL)
-  l=ssl_write(&H->ssl,buf,n);
+  l=ssl_write(&H->ssldata->ssl,buf,n);
   if (l<0) {
 #endif
     if (handle_ssl_error_code(sock,l,0)==-1) {
@@ -2500,12 +2504,7 @@ usage:
 #endif
   io_finishandshutdown();
 #ifdef SUPPORT_HTTPS
-#ifdef USE_OPENSSL
-  ENGINE_cleanup();
-  CRYPTO_cleanup_all_ex_data();
-  ASN1_STRING_TABLE_cleanup();
-  ERR_free_strings();
-#endif
+  free_tls_memory();
 #endif
 #ifdef SUPPORT_SMB
   {
