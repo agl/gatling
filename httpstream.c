@@ -21,9 +21,17 @@ int httpstream_update(struct httpstreamstate* hss,char c) {
     // else fall through
 
   case HSS_HEADER:
-    if (c=='H') hss->type=RESPONSE;
-    else if (c=='P') hss->type=POSTREQUEST;
-    else hss->type=REQUEST;
+    if (hss->type == DONTKNOW) {
+      if (c=='H') hss->type=RESPONSE_MAYBE;
+      else if (c=='P') hss->type=POSTREQUEST;
+      else hss->type=REQUEST;
+    }
+    else if (hss->type == RESPONSE_MAYBE) {
+      if (c=='T')
+	hss->type=RESPONSE;	/* "HTTP/2.0 OK" */
+      else
+	hss->type=REQUEST;	/* "HEAD /foo HTTP/1.1" */
+    }
 new_header_line:
     if ((c|0x20)=='c') hss->state=HSS_HEADER_C;
     else if ((c|0x20)=='t') hss->state=HSS_HEADER_T;

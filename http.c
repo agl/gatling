@@ -1079,6 +1079,18 @@ nextpacket:
     if (!H->havefirst) {
       H->havefirst=1;
       httpstream_initstate(&H->hss);
+
+      /* Problem: the HTTP stream parser does not know whether the
+       * request was a GET, a POST or a HEAD when it parses the
+       * response.  If somebody uses HTTP keep-alive and first sends a
+       * HEAD and the na GET, the stream parser will not reqlize it was
+       * a HEAD and still expect the content after the header.
+
+       * So we need to tell it not to do that.  Fortunately, it already
+       * has a mode for that, that is triggered by setting the type to
+       * REQUEST. */
+      if (*(char*)array_start(&peer->r)=='H') H->hss.type=REQUEST;
+
       if (H->proxyproto==SCGI || H->proxyproto==FASTCGI) {
 	if (case_starts(buf,"Status:")) {
 	  --buf; ++i;
