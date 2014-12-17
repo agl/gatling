@@ -2476,6 +2476,7 @@ void handle_write_httppost(int64 i,struct http_data* h) {
   r=iob_send(i,&h->iob);
   if (r>0) h->sent+=r;
   if (iob_bytesleft(&h->iob)==0) {
+    iob_reset(&h->iob);
 #if 0
     /* this case is now handled in proxy_is_readable() now */
     struct http_data* peer=io_getcookie(h->buddy);
